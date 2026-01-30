@@ -104,8 +104,15 @@ pub const streamingResize = streaming.streamingResize;
 /// Inspired by libvips' demand-driven architecture
 pub const streamingResizeLowMem = streaming.streamingResizeLowMem;
 
+/// Ultra-low memory resize with incremental decompression
+/// Memory: O(compressed_size + width * 4) - decompresses on demand
+pub const streamingResizeUltraLowMem = streaming.streamingResizeUltraLowMem;
+
 /// Streaming thumbnail - keeps cropped rows in memory
 pub const streamingThumbnail = streaming.streamingThumbnail;
+
+/// Streaming PNG decoder - decompresses row-by-row
+pub const PngStreamingDecoder = streaming.PngStreamingDecoder;
 
 /// Row-by-row PNG writer
 pub const PngRowWriter = streaming.PngRowWriter;

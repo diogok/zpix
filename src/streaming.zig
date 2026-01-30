@@ -6,6 +6,7 @@ const decode_context = @import("decode_context.zig");
 // Re-export shared types
 pub const DecodeError = decode_context.DecodeError;
 pub const PngDecodeContext = decode_context.PngDecodeContext;
+pub const PngStreamingDecoder = decode_context.PngStreamingDecoder;
 pub const applyFilter = decode_context.applyFilter;
 
 /// PNG header information needed for streaming
@@ -334,9 +335,115 @@ pub fn streamingResizeLowMem(
     try row_writer.finish();
 }
 
+/// Ultra-low memory streaming resize using incremental decompression.
+/// Memory: O(compressed_size + width * 4) - only compressed data + 2 row cache
+///
+/// This is the most memory-efficient resize:
+/// - Compressed data: ~10-50% of decompressed size (kept in memory)
+/// - Decompresses row-by-row instead of all at once
+/// - 2-row sliding window for bilinear interpolation
+///
+/// Trade-off: Cannot seek backward, so only works for sequential processing.
+pub fn streamingResizeUltraLowMem(
+    allocator: Allocator,
+    reader: *std.Io.Reader,
+    writer: *std.Io.Writer,
+    new_width: u32,
+    new_height: u32,
+) !void {
+    if (new_width == 0 or new_height == 0) {
+        return DecodeError.InvalidResizeDimensions;
+    }
+
+    // Use streaming decoder - decompresses on demand
+    var decoder = try PngStreamingDecoder.init(allocator, reader, .{});
+    defer decoder.deinit();
+
+    const src_width = decoder.width;
+    const src_height = decoder.height;
+    const channels = @as(usize, decoder.channels);
+    const src_stride = decoder.stride();
+    const dst_stride = @as(usize, new_width) * channels;
+
+    // 2-row cache for bilinear interpolation
+    var row_cache: [2][]u8 = undefined;
+    row_cache[0] = try allocator.alloc(u8, src_stride);
+    defer allocator.free(row_cache[0]);
+    row_cache[1] = try allocator.alloc(u8, src_stride);
+    defer allocator.free(row_cache[1]);
+    var cached_rows: [2]i64 = .{ -1, -1 };
+
+    const output_row = try allocator.alloc(u8, dst_stride);
+    defer allocator.free(output_row);
+
+    // Initialize writer
+    var row_writer = try PngRowWriter.init(allocator, writer, new_width, new_height, decoder.channels);
+    defer row_writer.deinit();
+
+    // Scaling ratios
+    const src_w = @as(f64, @floatFromInt(src_width));
+    const src_h = @as(f64, @floatFromInt(src_height));
+    const dst_w = @as(f64, @floatFromInt(new_width));
+    const dst_h = @as(f64, @floatFromInt(new_height));
+    const x_ratio = src_w / dst_w;
+    const y_ratio = src_h / dst_h;
+
+    // Track decoding progress
+    var decoded_up_to: i64 = -1;
+
+    // Process each output row
+    for (0..new_height) |dst_y| {
+        const src_y_f = (@as(f64, @floatFromInt(dst_y)) + 0.5) * y_ratio - 0.5;
+        const y0_i = @as(i64, @intFromFloat(@floor(src_y_f)));
+        const y0: u32 = @intCast(@max(0, y0_i));
+        const y1: u32 = @min(y0 + 1, src_height - 1);
+        const y_weight = src_y_f - @floor(src_y_f);
+
+        // Decode rows up to what we need
+        while (decoded_up_to < @as(i64, y1)) {
+            const row_data = (try decoder.readRow()) orelse return DecodeError.InvalidImageData;
+            decoded_up_to += 1;
+
+            // Store in rotating cache
+            const cache_slot: usize = @intCast(@mod(decoded_up_to, 2));
+            @memcpy(row_cache[cache_slot], row_data);
+            cached_rows[cache_slot] = decoded_up_to;
+        }
+
+        // Get cached rows
+        const row0 = if (cached_rows[0] == y0) row_cache[0] else row_cache[1];
+        const row1 = if (cached_rows[0] == y1) row_cache[0] else row_cache[1];
+
+        // Bilinear interpolation
+        for (0..new_width) |dst_x| {
+            const src_x_f = (@as(f64, @floatFromInt(dst_x)) + 0.5) * x_ratio - 0.5;
+            const x0 = @as(u32, @intFromFloat(@max(0, @floor(src_x_f))));
+            const x1 = @min(x0 + 1, src_width - 1);
+            const x_weight = src_x_f - @floor(src_x_f);
+
+            for (0..channels) |c| {
+                const p00 = @as(f64, @floatFromInt(row0[x0 * channels + c]));
+                const p10 = @as(f64, @floatFromInt(row0[x1 * channels + c]));
+                const p01 = @as(f64, @floatFromInt(row1[x0 * channels + c]));
+                const p11 = @as(f64, @floatFromInt(row1[x1 * channels + c]));
+
+                const top = p00 * (1.0 - x_weight) + p10 * x_weight;
+                const bottom = p01 * (1.0 - x_weight) + p11 * x_weight;
+                const value = top * (1.0 - y_weight) + bottom * y_weight;
+
+                output_row[dst_x * channels + c] = @intFromFloat(@round(@max(0, @min(255, value))));
+            }
+        }
+
+        try row_writer.writeRow(output_row);
+    }
+
+    try row_writer.finish();
+}
+
 /// Streaming resize - reads PNG row by row, outputs resized PNG
 /// Memory usage: O(width * height * channels) - keeps all decoded rows
-/// Note: For lower memory usage, see streamingResizeLowMem
+/// Note: For lower memory usage, see streamingResizeLowMem or streamingResizeUltraLowMem
 pub fn streamingResize(
     allocator: Allocator,
     reader: *std.Io.Reader,
@@ -691,6 +798,81 @@ test "streamingResizeLowMem matches streamingResize output" {
     var out2: std.Io.Writer.Allocating = .init(allocator);
     var reader2: std.Io.Reader = .fixed(png_data);
     try streamingResizeLowMem(allocator, &reader2, &out2.writer, 12, 12);
+    const data2 = try out2.toOwnedSlice();
+    defer allocator.free(data2);
+
+    // Load both results
+    var result1 = try png.loadFromMemory(allocator, data1);
+    defer result1.deinit();
+    var result2 = try png.loadFromMemory(allocator, data2);
+    defer result2.deinit();
+
+    // Should produce identical output
+    try std.testing.expectEqualSlices(u8, result1.data, result2.data);
+}
+
+test "streamingResizeUltraLowMem produces correct dimensions" {
+    const allocator = std.testing.allocator;
+
+    const image = @import("image.zig");
+    var img = try image.Image.init(allocator, 10, 10, 3);
+    defer img.deinit();
+
+    const red = [_]u8{ 255, 0, 0 };
+    img.setPixel(0, 0, &red);
+    img.setPixel(9, 9, &red);
+
+    const png_data = try png.saveToMemory(allocator, &img);
+    defer allocator.free(png_data);
+
+    var out_writer: std.Io.Writer.Allocating = .init(allocator);
+
+    var input_reader: std.Io.Reader = .fixed(png_data);
+    try streamingResizeUltraLowMem(allocator, &input_reader, &out_writer.writer, 20, 15);
+
+    const output_data = try out_writer.toOwnedSlice();
+    defer allocator.free(output_data);
+
+    var result = try png.loadFromMemory(allocator, output_data);
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(u32, 20), result.width);
+    try std.testing.expectEqual(@as(u32, 15), result.height);
+}
+
+test "streamingResizeUltraLowMem matches other resize methods" {
+    const allocator = std.testing.allocator;
+
+    const image = @import("image.zig");
+    var img = try image.Image.init(allocator, 8, 8, 3);
+    defer img.deinit();
+
+    // Create a gradient pattern
+    for (0..8) |y| {
+        for (0..8) |x| {
+            const pixel = [_]u8{
+                @intCast(x * 32),
+                @intCast(y * 32),
+                @intCast((x + y) * 16),
+            };
+            img.setPixel(@intCast(x), @intCast(y), &pixel);
+        }
+    }
+
+    const png_data = try png.saveToMemory(allocator, &img);
+    defer allocator.free(png_data);
+
+    // Resize with LowMem method
+    var out1: std.Io.Writer.Allocating = .init(allocator);
+    var reader1: std.Io.Reader = .fixed(png_data);
+    try streamingResizeLowMem(allocator, &reader1, &out1.writer, 12, 12);
+    const data1 = try out1.toOwnedSlice();
+    defer allocator.free(data1);
+
+    // Resize with UltraLowMem method
+    var out2: std.Io.Writer.Allocating = .init(allocator);
+    var reader2: std.Io.Reader = .fixed(png_data);
+    try streamingResizeUltraLowMem(allocator, &reader2, &out2.writer, 12, 12);
     const data2 = try out2.toOwnedSlice();
     defer allocator.free(data2);
 

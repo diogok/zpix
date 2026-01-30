@@ -141,6 +141,56 @@ test "PNG decoder handles interlaced (Adam7) images" {
     try std.testing.expectEqualSlices(u8, ref_slice, zig_image.data);
 }
 
+test "PNG decoder handles grayscale images" {
+    const allocator = std.testing.allocator;
+
+    // Load with C reference implementation
+    const ref = stb_load_png("test/fixtures/test_gray_8x8.png") orelse {
+        std.debug.print("Failed to load reference image\n", .{});
+        return error.ReferenceLoadFailed;
+    };
+    defer stb_free(ref.data);
+
+    // Load with our Zig implementation
+    var zig_image = try stbz.loadPngFile(allocator, "test/fixtures/test_gray_8x8.png");
+    defer zig_image.deinit();
+
+    // Compare dimensions
+    try std.testing.expectEqual(@as(u32, @intCast(ref.width)), zig_image.width);
+    try std.testing.expectEqual(@as(u32, @intCast(ref.height)), zig_image.height);
+    try std.testing.expectEqual(@as(u8, @intCast(ref.channels)), zig_image.channels);
+
+    // Compare pixel data byte-by-byte
+    const size = @as(usize, @intCast(ref.width)) * @as(usize, @intCast(ref.height)) * @as(usize, @intCast(ref.channels));
+    const ref_slice = ref.data[0..size];
+    try std.testing.expectEqualSlices(u8, ref_slice, zig_image.data);
+}
+
+test "PNG decoder handles grayscale+alpha images" {
+    const allocator = std.testing.allocator;
+
+    // Load with C reference implementation
+    const ref = stb_load_png("test/fixtures/test_gray_alpha_8x8.png") orelse {
+        std.debug.print("Failed to load reference image\n", .{});
+        return error.ReferenceLoadFailed;
+    };
+    defer stb_free(ref.data);
+
+    // Load with our Zig implementation
+    var zig_image = try stbz.loadPngFile(allocator, "test/fixtures/test_gray_alpha_8x8.png");
+    defer zig_image.deinit();
+
+    // Compare dimensions
+    try std.testing.expectEqual(@as(u32, @intCast(ref.width)), zig_image.width);
+    try std.testing.expectEqual(@as(u32, @intCast(ref.height)), zig_image.height);
+    try std.testing.expectEqual(@as(u8, @intCast(ref.channels)), zig_image.channels);
+
+    // Compare pixel data byte-by-byte
+    const size = @as(usize, @intCast(ref.width)) * @as(usize, @intCast(ref.height)) * @as(usize, @intCast(ref.channels));
+    const ref_slice = ref.data[0..size];
+    try std.testing.expectEqualSlices(u8, ref_slice, zig_image.data);
+}
+
 test "PNG decoder handles large interlaced images" {
     const allocator = std.testing.allocator;
 

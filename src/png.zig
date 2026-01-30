@@ -116,6 +116,8 @@ pub fn loadFromMemory(allocator: Allocator, data: []const u8) !Image {
             }
 
             channels = switch (color_type) {
+                .grayscale => 1,
+                .grayscale_alpha => 2,
                 .rgb => 3,
                 .rgba => 4,
                 else => return PngError.UnsupportedColorType,
@@ -369,8 +371,14 @@ fn writeIhdrChunk(allocator: Allocator, output: *std.ArrayList(u8), width: u32, 
     std.mem.writeInt(u32, ihdr_data[4..8], height, .big);
     // Bit depth (1 byte) - always 8
     ihdr_data[8] = 8;
-    // Color type (1 byte) - 2 for RGB, 6 for RGBA
-    ihdr_data[9] = if (channels == 4) 6 else 2;
+    // Color type (1 byte) - 0 for grayscale, 2 for RGB, 4 for grayscale+alpha, 6 for RGBA
+    ihdr_data[9] = switch (channels) {
+        1 => 0, // grayscale
+        2 => 4, // grayscale + alpha
+        3 => 2, // RGB
+        4 => 6, // RGBA
+        else => 2,
+    };
     // Compression method (1 byte) - always 0
     ihdr_data[10] = 0;
     // Filter method (1 byte) - always 0
@@ -530,4 +538,60 @@ test "PNG save produces valid PNG file" {
     try std.testing.expectEqual(@as(u32, 2), decoded.width);
     try std.testing.expectEqual(@as(u32, 2), decoded.height);
     try std.testing.expectEqual(@as(u8, 4), decoded.channels);
+}
+
+test "PNG round-trip: grayscale image" {
+    const allocator = std.testing.allocator;
+
+    // Create a grayscale test image
+    var img = try Image.init(allocator, 4, 4, 1);
+    defer img.deinit();
+
+    // Fill with gradient
+    for (0..16) |i| {
+        img.data[i] = @intCast(i * 16);
+    }
+
+    // Encode to PNG
+    const png_data = try saveToMemory(allocator, &img);
+    defer allocator.free(png_data);
+
+    // Decode back
+    var decoded = try loadFromMemory(allocator, png_data);
+    defer decoded.deinit();
+
+    // Verify
+    try std.testing.expectEqual(img.width, decoded.width);
+    try std.testing.expectEqual(img.height, decoded.height);
+    try std.testing.expectEqual(img.channels, decoded.channels);
+    try std.testing.expectEqualSlices(u8, img.data, decoded.data);
+}
+
+test "PNG round-trip: grayscale+alpha image" {
+    const allocator = std.testing.allocator;
+
+    // Create a grayscale+alpha test image
+    var img = try Image.init(allocator, 4, 4, 2);
+    defer img.deinit();
+
+    // Fill with pattern
+    var i: usize = 0;
+    while (i < 32) : (i += 2) {
+        img.data[i] = @intCast((i / 2) * 16); // gray value
+        img.data[i + 1] = 200; // alpha
+    }
+
+    // Encode to PNG
+    const png_data = try saveToMemory(allocator, &img);
+    defer allocator.free(png_data);
+
+    // Decode back
+    var decoded = try loadFromMemory(allocator, png_data);
+    defer decoded.deinit();
+
+    // Verify
+    try std.testing.expectEqual(img.width, decoded.width);
+    try std.testing.expectEqual(img.height, decoded.height);
+    try std.testing.expectEqual(img.channels, decoded.channels);
+    try std.testing.expectEqualSlices(u8, img.data, decoded.data);
 }

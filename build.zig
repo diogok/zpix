@@ -85,4 +85,23 @@ pub fn build(b: *std.Build) void {
     const run_large_test = b.addRunArtifact(large_test);
     const large_step = b.step("test-large", "Run large image streaming test");
     large_step.dependOn(&run_large_test.step);
+
+    // Format step
+    const fmt = b.addFmt(.{
+        .paths = &.{ "src", "test" },
+    });
+    const fmt_step = b.step("fmt", "Format source code");
+    fmt_step.dependOn(&fmt.step);
+
+    // Check step (compile without codegen to find errors quickly)
+    const check = b.addTest(.{
+        .name = "check",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/stbz.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const check_step = b.step("check", "Check for compile errors");
+    check_step.dependOn(&check.step);
 }

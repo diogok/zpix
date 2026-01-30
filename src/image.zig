@@ -2,17 +2,19 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 pub const Image = struct {
+    const Self = @This();
+
     width: u32,
     height: u32,
     channels: u8,
     data: []u8,
     allocator: Allocator,
 
-    pub fn init(allocator: Allocator, width: u32, height: u32, channels: u8) !Image {
+    pub fn init(allocator: Allocator, width: u32, height: u32, channels: u8) !Self {
         const size = @as(usize, width) * @as(usize, height) * @as(usize, channels);
         const data = try allocator.alloc(u8, size);
         @memset(data, 0);
-        return Image{
+        return Self{
             .width = width,
             .height = height,
             .channels = channels,
@@ -21,29 +23,33 @@ pub const Image = struct {
         };
     }
 
-    pub fn deinit(self: *Image) void {
+    pub fn deinit(self: *Self) void {
         self.allocator.free(self.data);
         self.* = undefined;
     }
 
-    pub fn getPixel(self: *const Image, x: u32, y: u32) []const u8 {
+    pub fn getPixel(self: *const Self, x: u32, y: u32) []const u8 {
+        std.debug.assert(x < self.width);
+        std.debug.assert(y < self.height);
         const idx = (@as(usize, y) * @as(usize, self.width) + @as(usize, x)) * @as(usize, self.channels);
         return self.data[idx .. idx + self.channels];
     }
 
-    pub fn setPixel(self: *Image, x: u32, y: u32, pixel: []const u8) void {
+    pub fn setPixel(self: *Self, x: u32, y: u32, pixel: []const u8) void {
+        std.debug.assert(x < self.width);
+        std.debug.assert(y < self.height);
         std.debug.assert(pixel.len == self.channels);
         const idx = (@as(usize, y) * @as(usize, self.width) + @as(usize, x)) * @as(usize, self.channels);
         @memcpy(self.data[idx .. idx + self.channels], pixel);
     }
 
-    pub fn clone(self: *const Image, allocator: Allocator) !Image {
-        const new_image = try Image.init(allocator, self.width, self.height, self.channels);
+    pub fn clone(self: *const Self, allocator: Allocator) !Self {
+        const new_image = try Self.init(allocator, self.width, self.height, self.channels);
         @memcpy(new_image.data, self.data);
         return new_image;
     }
 
-    pub fn crop(self: *const Image, x: u32, y: u32, crop_width: u32, crop_height: u32) !Image {
+    pub fn crop(self: *const Self, x: u32, y: u32, crop_width: u32, crop_height: u32) !Self {
         // Validate bounds
         if (x + crop_width > self.width or y + crop_height > self.height) {
             return error.CropOutOfBounds;
@@ -52,15 +58,14 @@ pub const Image = struct {
             return error.InvalidCropDimensions;
         }
 
-        var result = try Image.init(self.allocator, crop_width, crop_height, self.channels);
+        var result = try Self.init(self.allocator, crop_width, crop_height, self.channels);
         errdefer result.deinit();
 
         const src_stride = @as(usize, self.width) * @as(usize, self.channels);
         const dst_stride = @as(usize, crop_width) * @as(usize, self.channels);
         const x_offset = @as(usize, x) * @as(usize, self.channels);
 
-        var row: usize = 0;
-        while (row < crop_height) : (row += 1) {
+        for (0..crop_height) |row| {
             const src_row = @as(usize, y) + row;
             const src_start = src_row * src_stride + x_offset;
             const dst_start = row * dst_stride;
@@ -71,12 +76,12 @@ pub const Image = struct {
     }
 
     /// Resize image using bilinear interpolation
-    pub fn resize(self: *const Image, new_width: u32, new_height: u32) !Image {
+    pub fn resize(self: *const Self, new_width: u32, new_height: u32) !Self {
         if (new_width == 0 or new_height == 0) {
             return error.InvalidResizeDimensions;
         }
 
-        var result = try Image.init(self.allocator, new_width, new_height, self.channels);
+        var result = try Self.init(self.allocator, new_width, new_height, self.channels);
         errdefer result.deinit();
 
         const src_w = @as(f64, @floatFromInt(self.width));
@@ -87,10 +92,8 @@ pub const Image = struct {
         const x_ratio = src_w / dst_w;
         const y_ratio = src_h / dst_h;
 
-        var dst_y: u32 = 0;
-        while (dst_y < new_height) : (dst_y += 1) {
-            var dst_x: u32 = 0;
-            while (dst_x < new_width) : (dst_x += 1) {
+        for (0..new_height) |dst_y| {
+            for (0..new_width) |dst_x| {
                 // Map destination pixel to source coordinates
                 const src_x_f = (@as(f64, @floatFromInt(dst_x)) + 0.5) * x_ratio - 0.5;
                 const src_y_f = (@as(f64, @floatFromInt(dst_y)) + 0.5) * y_ratio - 0.5;
@@ -126,7 +129,7 @@ pub const Image = struct {
                     pixel_buf[ch] = @intFromFloat(@round(@max(0, @min(255, value))));
                 }
 
-                result.setPixel(dst_x, dst_y, pixel_buf[0..self.channels]);
+                result.setPixel(@intCast(dst_x), @intCast(dst_y), pixel_buf[0..self.channels]);
             }
         }
 
@@ -134,19 +137,17 @@ pub const Image = struct {
     }
 
     /// Rotate image 90 degrees clockwise
-    pub fn rotate90(self: *const Image) !Image {
+    pub fn rotate90(self: *const Self) !Self {
         // Width and height swap
-        var result = try Image.init(self.allocator, self.height, self.width, self.channels);
+        var result = try Self.init(self.allocator, self.height, self.width, self.channels);
         errdefer result.deinit();
 
-        var y: u32 = 0;
-        while (y < self.height) : (y += 1) {
-            var x: u32 = 0;
-            while (x < self.width) : (x += 1) {
+        for (0..self.height) |y| {
+            for (0..self.width) |x| {
                 // (x, y) -> (height - 1 - y, x) for 90° CW
-                const new_x = self.height - 1 - y;
-                const new_y = x;
-                const pixel = self.getPixel(x, y);
+                const new_x = self.height - 1 - @as(u32, @intCast(y));
+                const new_y = @as(u32, @intCast(x));
+                const pixel = self.getPixel(@intCast(x), @intCast(y));
                 result.setPixel(new_x, new_y, pixel);
             }
         }
@@ -155,18 +156,16 @@ pub const Image = struct {
     }
 
     /// Rotate image 180 degrees
-    pub fn rotate180(self: *const Image) !Image {
-        var result = try Image.init(self.allocator, self.width, self.height, self.channels);
+    pub fn rotate180(self: *const Self) !Self {
+        var result = try Self.init(self.allocator, self.width, self.height, self.channels);
         errdefer result.deinit();
 
-        var y: u32 = 0;
-        while (y < self.height) : (y += 1) {
-            var x: u32 = 0;
-            while (x < self.width) : (x += 1) {
+        for (0..self.height) |y| {
+            for (0..self.width) |x| {
                 // (x, y) -> (width - 1 - x, height - 1 - y)
-                const new_x = self.width - 1 - x;
-                const new_y = self.height - 1 - y;
-                const pixel = self.getPixel(x, y);
+                const new_x = self.width - 1 - @as(u32, @intCast(x));
+                const new_y = self.height - 1 - @as(u32, @intCast(y));
+                const pixel = self.getPixel(@intCast(x), @intCast(y));
                 result.setPixel(new_x, new_y, pixel);
             }
         }
@@ -175,19 +174,17 @@ pub const Image = struct {
     }
 
     /// Rotate image 270 degrees clockwise (= 90 degrees counter-clockwise)
-    pub fn rotate270(self: *const Image) !Image {
+    pub fn rotate270(self: *const Self) !Self {
         // Width and height swap
-        var result = try Image.init(self.allocator, self.height, self.width, self.channels);
+        var result = try Self.init(self.allocator, self.height, self.width, self.channels);
         errdefer result.deinit();
 
-        var y: u32 = 0;
-        while (y < self.height) : (y += 1) {
-            var x: u32 = 0;
-            while (x < self.width) : (x += 1) {
+        for (0..self.height) |y| {
+            for (0..self.width) |x| {
                 // (x, y) -> (y, width - 1 - x) for 90° CCW
-                const new_x = y;
-                const new_y = self.width - 1 - x;
-                const pixel = self.getPixel(x, y);
+                const new_x = @as(u32, @intCast(y));
+                const new_y = self.width - 1 - @as(u32, @intCast(x));
+                const pixel = self.getPixel(@intCast(x), @intCast(y));
                 result.setPixel(new_x, new_y, pixel);
             }
         }
@@ -196,17 +193,15 @@ pub const Image = struct {
     }
 
     /// Flip image horizontally (mirror left-right)
-    pub fn flipHorizontal(self: *const Image) !Image {
-        var result = try Image.init(self.allocator, self.width, self.height, self.channels);
+    pub fn flipHorizontal(self: *const Self) !Self {
+        var result = try Self.init(self.allocator, self.width, self.height, self.channels);
         errdefer result.deinit();
 
-        var y: u32 = 0;
-        while (y < self.height) : (y += 1) {
-            var x: u32 = 0;
-            while (x < self.width) : (x += 1) {
-                const new_x = self.width - 1 - x;
-                const pixel = self.getPixel(x, y);
-                result.setPixel(new_x, y, pixel);
+        for (0..self.height) |y| {
+            for (0..self.width) |x| {
+                const new_x = self.width - 1 - @as(u32, @intCast(x));
+                const pixel = self.getPixel(@intCast(x), @intCast(y));
+                result.setPixel(new_x, @intCast(y), pixel);
             }
         }
 
@@ -214,17 +209,15 @@ pub const Image = struct {
     }
 
     /// Flip image vertically (mirror top-bottom)
-    pub fn flipVertical(self: *const Image) !Image {
-        var result = try Image.init(self.allocator, self.width, self.height, self.channels);
+    pub fn flipVertical(self: *const Self) !Self {
+        var result = try Self.init(self.allocator, self.width, self.height, self.channels);
         errdefer result.deinit();
 
-        var y: u32 = 0;
-        while (y < self.height) : (y += 1) {
-            var x: u32 = 0;
-            while (x < self.width) : (x += 1) {
-                const new_y = self.height - 1 - y;
-                const pixel = self.getPixel(x, y);
-                result.setPixel(x, new_y, pixel);
+        for (0..self.height) |y| {
+            for (0..self.width) |x| {
+                const new_y = self.height - 1 - @as(u32, @intCast(y));
+                const pixel = self.getPixel(@intCast(x), @intCast(y));
+                result.setPixel(@intCast(x), new_y, pixel);
             }
         }
 

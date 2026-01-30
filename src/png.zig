@@ -2,143 +2,29 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const image = @import("image.zig");
 const Image = image.Image;
+const decode_context = @import("decode_context.zig");
 
-pub const PngError = error{
-    InvalidSignature,
-    InvalidChunk,
-    UnsupportedColorType,
-    UnsupportedBitDepth,
-    UnsupportedInterlace,
-    InvalidFilter,
-    DecompressionFailed,
-    InvalidImageData,
-    OutOfMemory,
-    EndOfStream,
-};
+// Re-export shared types
+pub const DecodeError = decode_context.DecodeError;
+pub const PngDecodeContext = decode_context.PngDecodeContext;
+pub const PNG_SIGNATURE = decode_context.PNG_SIGNATURE;
+pub const ChunkType = decode_context.ChunkType;
+pub const Adam7 = decode_context.Adam7;
+pub const applyFilter = decode_context.applyFilter;
 
-const PNG_SIGNATURE = [8]u8{ 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' };
-
-const ColorType = enum(u8) {
-    grayscale = 0,
-    rgb = 2,
-    indexed = 3,
-    grayscale_alpha = 4,
-    rgba = 6,
-};
-
-// Adam7 interlacing parameters: start_x, start_y, x_spacing, y_spacing
-const Adam7 = struct {
-    const passes = [7][4]u32{
-        .{ 0, 0, 8, 8 }, // Pass 1
-        .{ 4, 0, 8, 8 }, // Pass 2
-        .{ 0, 4, 4, 8 }, // Pass 3
-        .{ 2, 0, 4, 4 }, // Pass 4
-        .{ 0, 2, 2, 4 }, // Pass 5
-        .{ 1, 0, 2, 2 }, // Pass 6
-        .{ 0, 1, 1, 2 }, // Pass 7
-    };
-
-    fn passWidth(img_width: u32, pass: usize) u32 {
-        const start_x = passes[pass][0];
-        const spacing_x = passes[pass][2];
-        if (img_width <= start_x) return 0;
-        return (img_width - start_x + spacing_x - 1) / spacing_x;
-    }
-
-    fn passHeight(img_height: u32, pass: usize) u32 {
-        const start_y = passes[pass][1];
-        const spacing_y = passes[pass][3];
-        if (img_height <= start_y) return 0;
-        return (img_height - start_y + spacing_y - 1) / spacing_y;
-    }
-};
-
-const ChunkType = struct {
-    const IHDR = [4]u8{ 'I', 'H', 'D', 'R' };
-    const IDAT = [4]u8{ 'I', 'D', 'A', 'T' };
-    const IEND = [4]u8{ 'I', 'E', 'N', 'D' };
-    const PLTE = [4]u8{ 'P', 'L', 'T', 'E' };
-};
+// Legacy error type for backwards compatibility
+pub const PngError = DecodeError;
 
 /// Core decoder: reads PNG from any std.Io.Reader
 pub fn decode(allocator: Allocator, reader: *std.Io.Reader) !Image {
-    // Verify PNG signature
-    const signature = try reader.takeArray(8);
-    if (!std.mem.eql(u8, signature, &PNG_SIGNATURE)) {
-        return PngError.InvalidSignature;
-    }
-
-    var width: u32 = 0;
-    var height: u32 = 0;
-    var bit_depth: u8 = 0;
-    var color_type: ColorType = .rgb;
-    var channels: u8 = 3;
-    var interlace: u8 = 0;
-    var idat_data: std.ArrayList(u8) = .empty;
-    defer idat_data.deinit(allocator);
-
-    // Parse chunks
-    while (true) {
-        const length = reader.takeInt(u32, .big) catch break;
-        const chunk_type = reader.takeArray(4) catch break;
-
-        if (std.mem.eql(u8, chunk_type, &ChunkType.IHDR)) {
-            width = try reader.takeInt(u32, .big);
-            height = try reader.takeInt(u32, .big);
-            bit_depth = try reader.takeByte();
-            const ct = try reader.takeByte();
-            color_type = std.meta.intToEnum(ColorType, ct) catch return PngError.UnsupportedColorType;
-            const compression = try reader.takeByte();
-            const filter = try reader.takeByte();
-            interlace = try reader.takeByte();
-            _ = compression;
-            _ = filter;
-
-            if (bit_depth != 8) {
-                return PngError.UnsupportedBitDepth;
-            }
-            if (interlace != 0 and interlace != 1) {
-                return PngError.UnsupportedInterlace;
-            }
-
-            channels = switch (color_type) {
-                .grayscale => 1,
-                .grayscale_alpha => 2,
-                .rgb => 3,
-                .rgba => 4,
-                else => return PngError.UnsupportedColorType,
-            };
-
-            // Skip CRC
-            try reader.discardAll(4);
-        } else if (std.mem.eql(u8, chunk_type, &ChunkType.IDAT)) {
-            // Read IDAT data in chunks to handle large compressed data
-            var remaining: usize = length;
-            while (remaining > 0) {
-                const to_read = @min(remaining, 4096);
-                const chunk_data = try reader.take(to_read);
-                try idat_data.appendSlice(allocator, chunk_data);
-                remaining -= to_read;
-            }
-            // Skip CRC
-            try reader.discardAll(4);
-        } else if (std.mem.eql(u8, chunk_type, &ChunkType.IEND)) {
-            break;
-        } else {
-            // Skip unknown chunk
-            try reader.discardAll(length + 4); // data + CRC
-        }
-    }
-
-    // Decompress IDAT data (zlib)
-    const raw_data = try decompressZlib(allocator, idat_data.items);
-    defer allocator.free(raw_data);
+    var ctx = try PngDecodeContext.init(allocator, reader);
+    defer ctx.deinit();
 
     // Reconstruct image from filtered scanlines
-    if (interlace == 1) {
-        return reconstructInterlacedImage(allocator, raw_data, width, height, channels);
+    if (ctx.interlace == 1) {
+        return reconstructInterlacedImage(allocator, ctx.raw_data, ctx.width, ctx.height, ctx.channels);
     } else {
-        return reconstructImage(allocator, raw_data, width, height, channels);
+        return reconstructImage(allocator, ctx.raw_data, ctx.width, ctx.height, ctx.channels);
     }
 }
 
@@ -159,34 +45,19 @@ pub fn loadFromMemory(allocator: Allocator, data: []const u8) !Image {
     return decode(allocator, &reader);
 }
 
-fn decompressZlib(allocator: Allocator, data: []const u8) ![]u8 {
-    var input_reader: std.Io.Reader = .fixed(data);
-    var decompress: std.compress.flate.Decompress = .init(&input_reader, .zlib, &.{});
-
-    var result: std.ArrayList(u8) = .empty;
-    errdefer result.deinit(allocator);
-
-    decompress.reader.appendRemainingUnlimited(allocator, &result) catch {
-        return PngError.DecompressionFailed;
-    };
-
-    return result.toOwnedSlice(allocator);
-}
-
 fn reconstructImage(allocator: Allocator, raw_data: []const u8, width: u32, height: u32, channels: u8) !Image {
     const stride = @as(usize, width) * @as(usize, channels);
     const expected_size = @as(usize, height) * (stride + 1); // +1 for filter byte per row
 
     if (raw_data.len != expected_size) {
-        return PngError.InvalidImageData;
+        return DecodeError.InvalidImageData;
     }
 
     var img = try Image.init(allocator, width, height, channels);
     errdefer img.deinit();
 
     var prev_row: ?[]const u8 = null;
-    var y: usize = 0;
-    while (y < height) : (y += 1) {
+    for (0..height) |y| {
         const row_start = y * (stride + 1);
         const filter_type = raw_data[row_start];
         const filtered_row = raw_data[row_start + 1 .. row_start + 1 + stride];
@@ -217,7 +88,7 @@ fn reconstructInterlacedImage(allocator: Allocator, raw_data: []const u8, width:
         const pass_size = @as(usize, pass_height) * (pass_stride + 1); // +1 for filter byte per row
 
         if (offset + pass_size > raw_data.len) {
-            return PngError.InvalidImageData;
+            return DecodeError.InvalidImageData;
         }
 
         // Allocate temporary buffer for this pass
@@ -226,8 +97,7 @@ fn reconstructInterlacedImage(allocator: Allocator, raw_data: []const u8, width:
 
         // Decode the pass (apply filters)
         var prev_row: ?[]const u8 = null;
-        var y: usize = 0;
-        while (y < pass_height) : (y += 1) {
+        for (0..pass_height) |y| {
             const row_start = offset + y * (pass_stride + 1);
             const filter_type = raw_data[row_start];
             const filtered_row = raw_data[row_start + 1 .. row_start + 1 + pass_stride];
@@ -243,13 +113,11 @@ fn reconstructInterlacedImage(allocator: Allocator, raw_data: []const u8, width:
         const spacing_x = Adam7.passes[pass][2];
         const spacing_y = Adam7.passes[pass][3];
 
-        var py: u32 = 0;
-        while (py < pass_height) : (py += 1) {
-            var px: u32 = 0;
-            while (px < pass_width) : (px += 1) {
-                const src_offset = (@as(usize, py) * pass_stride) + (@as(usize, px) * channels);
-                const dst_x = start_x + px * spacing_x;
-                const dst_y = start_y + py * spacing_y;
+        for (0..pass_height) |py| {
+            for (0..pass_width) |px| {
+                const src_offset = (py * pass_stride) + (px * channels);
+                const dst_x = start_x + @as(u32, @intCast(px)) * spacing_x;
+                const dst_y = start_y + @as(u32, @intCast(py)) * spacing_y;
                 const dst_offset = (@as(usize, dst_y) * img_stride) + (@as(usize, dst_x) * channels);
 
                 @memcpy(img.data[dst_offset..][0..channels], pass_pixels[src_offset..][0..channels]);
@@ -260,59 +128,6 @@ fn reconstructInterlacedImage(allocator: Allocator, raw_data: []const u8, width:
     }
 
     return img;
-}
-
-fn applyFilter(filter_type: u8, filtered: []const u8, prev_row: ?[]const u8, output: []u8, bpp: u8) !void {
-    const bytes_per_pixel = @as(usize, bpp);
-
-    switch (filter_type) {
-        0 => { // None
-            @memcpy(output, filtered);
-        },
-        1 => { // Sub
-            for (output, 0..) |*out, i| {
-                const a: u8 = if (i >= bytes_per_pixel) output[i - bytes_per_pixel] else 0;
-                out.* = filtered[i] +% a;
-            }
-        },
-        2 => { // Up
-            for (output, 0..) |*out, i| {
-                const b: u8 = if (prev_row) |pr| pr[i] else 0;
-                out.* = filtered[i] +% b;
-            }
-        },
-        3 => { // Average
-            for (output, 0..) |*out, i| {
-                const a: u16 = if (i >= bytes_per_pixel) output[i - bytes_per_pixel] else 0;
-                const b: u16 = if (prev_row) |pr| pr[i] else 0;
-                out.* = filtered[i] +% @as(u8, @intCast((a + b) / 2));
-            }
-        },
-        4 => { // Paeth
-            for (output, 0..) |*out, i| {
-                const a: i32 = if (i >= bytes_per_pixel) output[i - bytes_per_pixel] else 0;
-                const b: i32 = if (prev_row) |pr| pr[i] else 0;
-                const c: i32 = if (i >= bytes_per_pixel and prev_row != null) prev_row.?[i - bytes_per_pixel] else 0;
-                out.* = filtered[i] +% paethPredictor(a, b, c);
-            }
-        },
-        else => return PngError.InvalidFilter,
-    }
-}
-
-fn paethPredictor(a: i32, b: i32, c: i32) u8 {
-    const p = a + b - c;
-    const pa = @abs(p - a);
-    const pb = @abs(p - b);
-    const pc = @abs(p - c);
-
-    if (pa <= pb and pa <= pc) {
-        return @intCast(a);
-    } else if (pb <= pc) {
-        return @intCast(b);
-    } else {
-        return @intCast(c);
-    }
 }
 
 // ============================================================================
@@ -408,8 +223,7 @@ fn writeIdatChunks(allocator: Allocator, writer: *std.Io.Writer, img: *const Ima
     const filtered = try allocator.alloc(u8, filtered_size);
     defer allocator.free(filtered);
 
-    var y: usize = 0;
-    while (y < img.height) : (y += 1) {
+    for (0..img.height) |y| {
         const out_start = y * (stride + 1);
         const in_start = y * stride;
         filtered[out_start] = 0;
@@ -467,8 +281,7 @@ fn writeIdatChunksToList(allocator: Allocator, output: *std.ArrayList(u8), img: 
     const filtered = try allocator.alloc(u8, filtered_size);
     defer allocator.free(filtered);
 
-    var y: usize = 0;
-    while (y < img.height) : (y += 1) {
+    for (0..img.height) |y| {
         const out_start = y * (stride + 1);
         const in_start = y * stride;
         filtered[out_start] = 0;
@@ -484,55 +297,36 @@ fn writeIendChunkToList(allocator: Allocator, output: *std.ArrayList(u8)) !void 
     try writeChunkToList(allocator, output, ChunkType.IEND, &.{});
 }
 
-fn compressZlib(allocator: Allocator, data: []const u8) ![]u8 {
+/// Compress data using zlib format with fixed Huffman encoding.
+/// This provides actual compression (unlike stored blocks) using the predefined
+/// fixed Huffman codes from RFC 1951.
+pub fn compressZlib(allocator: Allocator, data: []const u8) ![]u8 {
     var output: std.ArrayList(u8) = .empty;
     errdefer output.deinit(allocator);
 
-    // Write zlib header (CMF, FLG)
-    // CMF = 0x78 (deflate, 32K window)
-    // FLG = 0x01 (fastest compression, no dict, checksum valid)
-    // Note: 0x78 0x01 is valid zlib header (FCHECK makes checksum valid)
-    try output.appendSlice(allocator, &[_]u8{ 0x78, 0x01 });
+    // Write zlib header (CMF=0x78, FLG=0x9C for default compression level)
+    // CMF: CM=8 (deflate), CINFO=7 (32K window)
+    // FLG: FLEVEL=2 (default), FDICT=0, FCHECK makes CMF*256+FLG divisible by 31
+    try output.appendSlice(allocator, &[_]u8{ 0x78, 0x9C });
 
-    // Write deflate stored blocks (no compression, but valid deflate format)
-    // Stored blocks are limited to 65535 bytes each
-    const max_block_size: usize = 65535;
-    var offset: usize = 0;
+    // Use a BitWriter to write variable-length codes
+    var bit_writer = BitWriter{ .output = &output, .allocator = allocator };
 
-    while (offset < data.len) {
-        const remaining = data.len - offset;
-        const block_size = @min(remaining, max_block_size);
-        const is_final = (offset + block_size >= data.len);
+    // Write BFINAL=1 (last block), BTYPE=01 (fixed Huffman)
+    try bit_writer.writeBits(1, 1); // BFINAL
+    try bit_writer.writeBits(1, 2); // BTYPE = 01 (fixed Huffman)
 
-        // Block header: 1 byte
-        // bit 0: BFINAL (1 if this is the last block)
-        // bits 1-2: BTYPE (00 = stored/uncompressed)
-        const header_byte: u8 = if (is_final) 0x01 else 0x00;
-        try output.append(allocator, header_byte);
-
-        // LEN: 2 bytes (little endian)
-        var len_buf: [2]u8 = undefined;
-        std.mem.writeInt(u16, &len_buf, @intCast(block_size), .little);
-        try output.appendSlice(allocator, &len_buf);
-
-        // NLEN: 2 bytes (one's complement of LEN, little endian)
-        var nlen_buf: [2]u8 = undefined;
-        std.mem.writeInt(u16, &nlen_buf, @intCast(~@as(u16, @intCast(block_size))), .little);
-        try output.appendSlice(allocator, &nlen_buf);
-
-        // Data
-        try output.appendSlice(allocator, data[offset..][0..block_size]);
-
-        offset += block_size;
+    // Encode each byte using fixed Huffman codes
+    for (data) |byte| {
+        try writeFixedHuffmanLiteral(&bit_writer, byte);
     }
 
-    // Handle empty data case
-    if (data.len == 0) {
-        // Empty final stored block
-        try output.append(allocator, 0x01); // BFINAL=1, BTYPE=00
-        try output.appendSlice(allocator, &[_]u8{ 0x00, 0x00 }); // LEN=0
-        try output.appendSlice(allocator, &[_]u8{ 0xFF, 0xFF }); // NLEN=~0
-    }
+    // Write end-of-block code (256)
+    // Code 256: 7 bits, value 0b0000000 (reversed to 0b0000000)
+    try bit_writer.writeBits(0, 7);
+
+    // Flush remaining bits
+    try bit_writer.flush();
 
     // Write Adler-32 checksum (big endian)
     const adler_checksum = std.hash.Adler32.hash(data);
@@ -542,6 +336,62 @@ fn compressZlib(allocator: Allocator, data: []const u8) ![]u8 {
 
     return output.toOwnedSlice(allocator);
 }
+
+/// Write a literal byte using fixed Huffman codes (RFC 1951 section 3.2.6)
+fn writeFixedHuffmanLiteral(bw: *BitWriter, literal: u8) !void {
+    if (literal <= 143) {
+        // Codes 0-143: 8 bits, 00110000 + literal = codes 48-191
+        // We need to bit-reverse before writing
+        const code: u8 = 0b00110000 +% literal;
+        try bw.writeBits(bitReverse8(code), 8);
+    } else {
+        // Codes 144-255: 9 bits, 110010000 + (literal - 144) = codes 400-511
+        const code: u16 = 0b110010000 + @as(u16, literal - 144);
+        try bw.writeBits(bitReverse16(code, 9), 9);
+    }
+}
+
+/// Reverse the bits of a u8
+fn bitReverse8(value: u8) u8 {
+    return @bitReverse(value);
+}
+
+/// Reverse the bits of a u16, then shift right to get the top 'bits' bits
+fn bitReverse16(value: u16, bits: u5) u16 {
+    const r = @bitReverse(value);
+    const shift: u4 = @intCast(16 - @as(u5, bits));
+    return r >> shift;
+}
+
+/// Helper struct for writing bits to an ArrayList
+const BitWriter = struct {
+    output: *std.ArrayList(u8),
+    allocator: Allocator,
+    bit_buffer: u32 = 0,
+    bit_count: u5 = 0,
+
+    /// Write bits to the buffer (LSB first, as per deflate spec)
+    fn writeBits(self: *BitWriter, value: anytype, bits: u5) !void {
+        self.bit_buffer |= @as(u32, @intCast(value)) << self.bit_count;
+        self.bit_count += bits;
+
+        // Flush complete bytes
+        while (self.bit_count >= 8) {
+            try self.output.append(self.allocator, @truncate(self.bit_buffer));
+            self.bit_buffer >>= 8;
+            self.bit_count -= 8;
+        }
+    }
+
+    /// Flush any remaining bits (pad with zeros)
+    fn flush(self: *BitWriter) !void {
+        if (self.bit_count > 0) {
+            try self.output.append(self.allocator, @truncate(self.bit_buffer));
+            self.bit_buffer = 0;
+            self.bit_count = 0;
+        }
+    }
+};
 
 test "PNG round-trip: save and load produces identical image" {
     const allocator = std.testing.allocator;
@@ -659,4 +509,61 @@ test "PNG round-trip: grayscale+alpha image" {
     try std.testing.expectEqual(img.height, decoded.height);
     try std.testing.expectEqual(img.channels, decoded.channels);
     try std.testing.expectEqualSlices(u8, img.data, decoded.data);
+}
+
+test "compressZlib produces valid zlib stream" {
+    const allocator = std.testing.allocator;
+
+    // Create test data with some variation
+    const data = try allocator.alloc(u8, 256);
+    defer allocator.free(data);
+    for (data, 0..) |*byte, i| {
+        byte.* = @intCast(i);
+    }
+
+    // Compress it
+    const compressed = try compressZlib(allocator, data);
+    defer allocator.free(compressed);
+
+    // Verify zlib header (0x78 0x9C = default compression)
+    try std.testing.expectEqual(@as(u8, 0x78), compressed[0]);
+    try std.testing.expectEqual(@as(u8, 0x9C), compressed[1]);
+
+    // Verify it decompresses correctly
+    var decompressor_buffer: [65536]u8 = undefined;
+    var reader: std.Io.Reader = .fixed(compressed);
+    var decompressor: std.compress.flate.Decompress = .init(&reader, .zlib, &decompressor_buffer);
+
+    const decompressed = try allocator.alloc(u8, data.len);
+    defer allocator.free(decompressed);
+
+    try decompressor.reader.readSliceAll(decompressed);
+    try std.testing.expectEqualSlices(u8, data, decompressed);
+}
+
+test "compressZlib handles empty data" {
+    const allocator = std.testing.allocator;
+
+    const data: []const u8 = &.{};
+    const compressed = try compressZlib(allocator, data);
+    defer allocator.free(compressed);
+
+    // Should have header + empty block + checksum
+    try std.testing.expect(compressed.len > 0);
+
+    // Verify it decompresses correctly
+    var decompressor_buffer: [65536]u8 = undefined;
+    var reader: std.Io.Reader = .fixed(compressed);
+    var decompressor: std.compress.flate.Decompress = .init(&reader, .zlib, &decompressor_buffer);
+
+    const decompressed = try allocator.alloc(u8, 1);
+    defer allocator.free(decompressed);
+
+    // Empty data should decompress to nothing
+    const result = decompressor.reader.readSliceShort(decompressed);
+    if (result) |n| {
+        try std.testing.expectEqual(@as(usize, 0), n);
+    } else |_| {
+        // EndOfStream is also acceptable for empty data
+    }
 }

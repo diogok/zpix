@@ -102,9 +102,6 @@ pub const streamingResize = streaming.streamingResize;
 /// Streaming thumbnail with minimal memory
 pub const streamingThumbnail = streaming.streamingThumbnail;
 
-/// Row-by-row PNG reader
-pub const PngRowReader = streaming.PngRowReader;
-
 /// Row-by-row PNG writer
 pub const PngRowWriter = streaming.PngRowWriter;
 

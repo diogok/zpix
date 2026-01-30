@@ -14,10 +14,18 @@ const usage =
     \\  thumbnail <input> <output> <size>
     \\      Create a square thumbnail (crops to center, then resizes)
     \\
+    \\  rotate <input> <output> <angle>
+    \\      Rotate image (angle: 90, 180, or 270 degrees clockwise)
+    \\
+    \\  flip <input> <output> <direction>
+    \\      Flip image (direction: h for horizontal, v for vertical)
+    \\
     \\Examples:
     \\  stbz crop photo.png cropped.png 100 100 200 200
     \\  stbz resize photo.png small.png 640 480
     \\  stbz thumbnail photo.png thumb.png 128
+    \\  stbz rotate photo.png rotated.png 90
+    \\  stbz flip photo.png flipped.png h
     \\
 ;
 
@@ -62,6 +70,10 @@ pub fn main() !void {
         runResize(allocator, args);
     } else if (std.mem.eql(u8, command, "thumbnail")) {
         runThumbnail(allocator, args);
+    } else if (std.mem.eql(u8, command, "rotate")) {
+        runRotate(allocator, args);
+    } else if (std.mem.eql(u8, command, "flip")) {
+        runFlip(allocator, args);
     } else if (std.mem.eql(u8, command, "help") or std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "-h")) {
         writeOut(usage);
     } else {
@@ -193,6 +205,98 @@ fn runThumbnail(allocator: std.mem.Allocator, args: []const []const u8) void {
         std.process.exit(1);
     };
     printFmt("Thumbnail {s} -> {s} ({d}x{d})\n", .{ input_path, output_path, size, size });
+}
+
+fn runRotate(allocator: std.mem.Allocator, args: []const []const u8) void {
+    if (args.len != 5) {
+        writeErr("Error: rotate requires 3 arguments: <input> <output> <angle>\n");
+        writeErr("       angle must be 90, 180, or 270\n");
+        std.process.exit(1);
+    }
+
+    const input_path = args[2];
+    const output_path = args[3];
+    const angle = std.fmt.parseInt(u32, args[4], 10) catch {
+        writeErr("Error: invalid angle\n");
+        std.process.exit(1);
+    };
+
+    var img = stbz.loadPngFile(allocator, input_path) catch |err| {
+        printErrFmt("Error loading {s}: {}\n", .{ input_path, err });
+        std.process.exit(1);
+    };
+    defer img.deinit();
+
+    var rotated = switch (angle) {
+        90 => img.rotate90() catch |err| {
+            printErrFmt("Error rotating: {}\n", .{err});
+            std.process.exit(1);
+        },
+        180 => img.rotate180() catch |err| {
+            printErrFmt("Error rotating: {}\n", .{err});
+            std.process.exit(1);
+        },
+        270 => img.rotate270() catch |err| {
+            printErrFmt("Error rotating: {}\n", .{err});
+            std.process.exit(1);
+        },
+        else => {
+            writeErr("Error: angle must be 90, 180, or 270\n");
+            std.process.exit(1);
+        },
+    };
+    defer rotated.deinit();
+
+    savePng(output_path, &rotated) catch |err| {
+        printErrFmt("Error saving {s}: {}\n", .{ output_path, err });
+        std.process.exit(1);
+    };
+    printFmt("Rotated {s} -> {s} ({d}° clockwise)\n", .{ input_path, output_path, angle });
+}
+
+fn runFlip(allocator: std.mem.Allocator, args: []const []const u8) void {
+    if (args.len != 5) {
+        writeErr("Error: flip requires 3 arguments: <input> <output> <direction>\n");
+        writeErr("       direction must be 'h' (horizontal) or 'v' (vertical)\n");
+        std.process.exit(1);
+    }
+
+    const input_path = args[2];
+    const output_path = args[3];
+    const direction = args[4];
+
+    var img = stbz.loadPngFile(allocator, input_path) catch |err| {
+        printErrFmt("Error loading {s}: {}\n", .{ input_path, err });
+        std.process.exit(1);
+    };
+    defer img.deinit();
+
+    const dir_name: []const u8 = if (std.mem.eql(u8, direction, "h") or std.mem.eql(u8, direction, "horizontal"))
+        "horizontally"
+    else if (std.mem.eql(u8, direction, "v") or std.mem.eql(u8, direction, "vertical"))
+        "vertically"
+    else {
+        writeErr("Error: direction must be 'h' (horizontal) or 'v' (vertical)\n");
+        std.process.exit(1);
+    };
+
+    var flipped = if (std.mem.eql(u8, direction, "h") or std.mem.eql(u8, direction, "horizontal"))
+        img.flipHorizontal() catch |err| {
+            printErrFmt("Error flipping: {}\n", .{err});
+            std.process.exit(1);
+        }
+    else
+        img.flipVertical() catch |err| {
+            printErrFmt("Error flipping: {}\n", .{err});
+            std.process.exit(1);
+        };
+    defer flipped.deinit();
+
+    savePng(output_path, &flipped) catch |err| {
+        printErrFmt("Error saving {s}: {}\n", .{ output_path, err });
+        std.process.exit(1);
+    };
+    printFmt("Flipped {s} -> {s} ({s})\n", .{ input_path, output_path, dir_name });
 }
 
 fn savePng(path: []const u8, img: *const stbz.Image) !void {

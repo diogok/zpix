@@ -8,6 +8,8 @@ A Zig port of stb_image focusing on PNG support with thumbnail and tiling capabi
 - Crop operations
 - Resize operations (bilinear interpolation)
 - Thumbnail generation (center crop + resize)
+- Rotate (90°, 180°, 270°)
+- Flip (horizontal, vertical)
 - CLI tool for image processing
 
 ## PNG Support
@@ -53,6 +55,12 @@ stbz resize input.png output.png 640 480
 
 # Create a square thumbnail (crops to center, then resizes)
 stbz thumbnail input.png thumb.png 128
+
+# Rotate image (90, 180, or 270 degrees clockwise)
+stbz rotate input.png output.png 90
+
+# Flip image (h = horizontal, v = vertical)
+stbz flip input.png output.png h
 ```
 
 ## Library Usage

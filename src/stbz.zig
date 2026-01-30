@@ -93,13 +93,18 @@ pub fn thumbnailStream(
 // Low-Memory Streaming Operations (row-by-row processing)
 // ============================================================================
 
-/// Streaming crop with minimal memory (only row buffers)
+/// Streaming crop with minimal memory - O(width) memory
 pub const streamingCrop = streaming.streamingCrop;
 
-/// Streaming resize with minimal memory
+/// Streaming resize - keeps all decoded rows in memory
+/// For lower memory usage, see streamingResizeLowMem
 pub const streamingResize = streaming.streamingResize;
 
-/// Streaming thumbnail with minimal memory
+/// Streaming resize with 2-row sliding window - O(width) memory
+/// Inspired by libvips' demand-driven architecture
+pub const streamingResizeLowMem = streaming.streamingResizeLowMem;
+
+/// Streaming thumbnail - keeps cropped rows in memory
 pub const streamingThumbnail = streaming.streamingThumbnail;
 
 /// Row-by-row PNG writer

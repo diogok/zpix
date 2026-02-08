@@ -75,7 +75,7 @@ pub const Image = struct {
         return result;
     }
 
-    /// Resize image using bilinear interpolation
+    /// Resize image using bilinear interpolation (fixed-point integer math)
     pub fn resize(self: *const Self, new_width: u32, new_height: u32) !Self {
         if (new_width == 0 or new_height == 0) {
             return error.InvalidResizeDimensions;
@@ -84,57 +84,87 @@ pub const Image = struct {
         var result = try Self.init(self.allocator, new_width, new_height, self.channels);
         errdefer result.deinit();
 
-        const src_w = @as(f64, @floatFromInt(self.width));
-        const src_h = @as(f64, @floatFromInt(self.height));
-        const dst_w = @as(f64, @floatFromInt(new_width));
-        const dst_h = @as(f64, @floatFromInt(new_height));
+        const channels: usize = self.channels;
+        const src_data = self.data;
+        const dst_data = result.data;
+        const src_w: usize = self.width;
+        const src_h: usize = self.height;
+        const dst_w: usize = new_width;
+        const dst_h: usize = new_height;
+        const src_stride = src_w * channels;
+        const dst_stride = dst_w * channels;
 
-        const x_ratio = src_w / dst_w;
-        const y_ratio = src_h / dst_h;
+        // Fixed-point with 16 fractional bits
+        const SHIFT = 16;
+        const HALF = 1 << (SHIFT - 1); // 0.5 in fixed-point
 
-        for (0..new_height) |dst_y| {
-            for (0..new_width) |dst_x| {
-                // Map destination pixel to source coordinates
-                const src_x_f = (@as(f64, @floatFromInt(dst_x)) + 0.5) * x_ratio - 0.5;
-                const src_y_f = (@as(f64, @floatFromInt(dst_y)) + 0.5) * y_ratio - 0.5;
+        // Map: src_coord = (dst_coord + 0.5) * src_size / dst_size - 0.5
+        // In fixed-point: src_fp = ((dst * 2 + 1) * src_size * (1<<(SHIFT-1))) / dst_size - HALF
+        // Simplified: use step-based approach
 
-                // Get the four nearest source pixels
-                const x0 = @as(u32, @intFromFloat(@max(0, @floor(src_x_f))));
-                const y0 = @as(u32, @intFromFloat(@max(0, @floor(src_y_f))));
-                const x1 = @min(x0 + 1, self.width - 1);
-                const y1 = @min(y0 + 1, self.height - 1);
+        // Pre-compute x mapping: for each dst_x, store src_x0, src_x1, x_frac
+        const x_info = try self.allocator.alloc(XInfo, dst_w);
+        defer self.allocator.free(x_info);
 
-                // Calculate interpolation weights
-                const x_weight = src_x_f - @floor(src_x_f);
-                const y_weight = src_y_f - @floor(src_y_f);
+        for (0..dst_w) |dst_x| {
+            // src_x_fp = ((2*dst_x + 1) * src_w * HALF) / dst_w - HALF
+            const numer: u64 = (@as(u64, 2 * dst_x + 1) * @as(u64, src_w) * @as(u64, HALF));
+            const src_x_fp: i64 = @as(i64, @intCast(numer / @as(u64, dst_w))) - HALF;
 
-                // Get the four pixels
-                const p00 = self.getPixel(x0, y0);
-                const p10 = self.getPixel(x1, y0);
-                const p01 = self.getPixel(x0, y1);
-                const p11 = self.getPixel(x1, y1);
+            const clamped = std.math.clamp(src_x_fp, 0, @as(i64, @intCast((src_w - 1))) << SHIFT);
+            const x0: usize = @intCast(@as(u64, @intCast(clamped)) >> SHIFT);
+            const x1 = @min(x0 + 1, src_w - 1);
+            const frac: u32 = @intCast(@as(u64, @intCast(clamped)) & ((1 << SHIFT) - 1));
 
-                // Bilinear interpolation for each channel
-                var pixel_buf: [4]u8 = undefined;
-                for (0..self.channels) |ch| {
-                    const v00 = @as(f64, @floatFromInt(p00[ch]));
-                    const v10 = @as(f64, @floatFromInt(p10[ch]));
-                    const v01 = @as(f64, @floatFromInt(p01[ch]));
-                    const v11 = @as(f64, @floatFromInt(p11[ch]));
+            x_info[dst_x] = .{ .x0 = x0, .x1 = x1, .frac = frac };
+        }
 
-                    const top = v00 * (1.0 - x_weight) + v10 * x_weight;
-                    const bottom = v01 * (1.0 - x_weight) + v11 * x_weight;
-                    const value = top * (1.0 - y_weight) + bottom * y_weight;
+        for (0..dst_h) |dst_y| {
+            const numer_y: u64 = (@as(u64, 2 * dst_y + 1) * @as(u64, src_h) * @as(u64, HALF));
+            const src_y_fp: i64 = @as(i64, @intCast(numer_y / @as(u64, dst_h))) - HALF;
 
-                    pixel_buf[ch] = @intFromFloat(@round(@max(0, @min(255, value))));
+            const clamped_y = std.math.clamp(src_y_fp, 0, @as(i64, @intCast((src_h - 1))) << SHIFT);
+            const y0: usize = @intCast(@as(u64, @intCast(clamped_y)) >> SHIFT);
+            const y1 = @min(y0 + 1, src_h - 1);
+            const y_frac: u32 = @intCast(@as(u64, @intCast(clamped_y)) & ((1 << SHIFT) - 1));
+            const y_inv = @as(u32, (1 << SHIFT)) - y_frac;
+
+            const row0 = src_data[y0 * src_stride ..][0..src_stride];
+            const row1 = src_data[y1 * src_stride ..][0..src_stride];
+            const dst_row = dst_data[dst_y * dst_stride ..][0..dst_stride];
+
+            for (0..dst_w) |dst_x| {
+                const xi = x_info[dst_x];
+                const x_inv = @as(u32, (1 << SHIFT)) - xi.frac;
+
+                const off00 = xi.x0 * channels;
+                const off10 = xi.x1 * channels;
+
+                inline for (0..4) |ch| {
+                    if (ch < channels) {
+                        const v00: u64 = row0[off00 + ch];
+                        const v10: u64 = row0[off10 + ch];
+                        const v01: u64 = row1[off00 + ch];
+                        const v11: u64 = row1[off10 + ch];
+
+                        const top = v00 * x_inv + v10 * xi.frac;
+                        const bot = v01 * x_inv + v11 * xi.frac;
+                        const val = (top * y_inv + bot * y_frac + (1 << 31)) >> 32;
+
+                        dst_row[dst_x * channels + ch] = @intCast(val);
+                    }
                 }
-
-                result.setPixel(@intCast(dst_x), @intCast(dst_y), pixel_buf[0..self.channels]);
             }
         }
 
         return result;
     }
+
+    const XInfo = struct {
+        x0: usize,
+        x1: usize,
+        frac: u32,
+    };
 
     /// Rotate image 90 degrees clockwise
     pub fn rotate90(self: *const Self) !Self {

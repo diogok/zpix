@@ -26,6 +26,16 @@ void stb_free(unsigned char* data) {
     stbi_image_free(data);
 }
 
+// Encode PNG to memory
+unsigned char* stb_write_png_to_mem(const unsigned char* pixels, int w, int h, int channels, int* out_len) {
+    return stbi_write_png_to_mem(pixels, w * channels, w, h, channels, out_len);
+}
+
+// Free write output (allocated by STBIW_MALLOC)
+void stb_write_free(void* data) {
+    STBIW_FREE(data);
+}
+
 // Resize image
 unsigned char* stb_resize(const unsigned char* input_pixels, int input_w, int input_h,
                           int output_w, int output_h, int num_channels) {

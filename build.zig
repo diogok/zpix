@@ -106,6 +106,33 @@ pub fn build(b: *std.Build) void {
     const large_step = b.step("test-large", "Run large image streaming test");
     large_step.dependOn(&run_large_test.step);
 
+    // Benchmark executable (always ReleaseFast)
+    const bench = b.addExecutable(.{
+        .name = "bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/bench.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    bench.root_module.addImport("stbz", stbz_mod);
+    bench.root_module.addIncludePath(b.path("reference"));
+    bench.root_module.addCSourceFile(.{
+        .file = b.path("reference/ref_impl.c"),
+        .flags = &.{ "-std=c99", "-O2" },
+    });
+    bench.root_module.link_libc = true;
+
+    b.installArtifact(bench);
+
+    const run_bench = b.addRunArtifact(bench);
+    run_bench.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_bench.addArgs(args);
+    }
+    const bench_step = b.step("bench", "Run benchmarks (stbz vs stb_image)");
+    bench_step.dependOn(&run_bench.step);
+
     // Format step
     const fmt = b.addFmt(.{
         .paths = &.{ "src", "test" },

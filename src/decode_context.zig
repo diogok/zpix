@@ -138,10 +138,6 @@ pub const PngDecodeContext = struct {
         return @as(usize, self.width) * @as(usize, self.channels);
     }
 
-    /// Returns expected raw data size for non-interlaced image
-    pub fn expectedRawSize(self: Self) usize {
-        return @as(usize, self.height) * (self.stride() + 1);
-    }
 };
 
 fn decompressZlib(allocator: Allocator, data: []const u8, expected_size: usize) (DecodeError || Allocator.Error)![]u8 {

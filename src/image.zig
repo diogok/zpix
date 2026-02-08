@@ -43,12 +43,6 @@ pub const Image = struct {
         @memcpy(self.data[idx .. idx + self.channels], pixel);
     }
 
-    pub fn clone(self: *const Self, allocator: Allocator) !Self {
-        const new_image = try Self.init(allocator, self.width, self.height, self.channels);
-        @memcpy(new_image.data, self.data);
-        return new_image;
-    }
-
     pub fn crop(self: *const Self, x: u32, y: u32, crop_width: u32, crop_height: u32) !Self {
         // Validate bounds
         if (x + crop_width > self.width or y + crop_height > self.height) {
@@ -286,26 +280,6 @@ test "Image.setPixel and getPixel work correctly" {
 
     const retrieved = img.getPixel(5, 3);
     try std.testing.expectEqualSlices(u8, &pixel, retrieved);
-}
-
-test "Image.clone creates independent copy" {
-    const allocator = std.testing.allocator;
-    var img = try Image.init(allocator, 10, 10, 3);
-    defer img.deinit();
-
-    const pixel = [_]u8{ 100, 150, 200 };
-    img.setPixel(2, 2, &pixel);
-
-    var cloned = try img.clone(allocator);
-    defer cloned.deinit();
-
-    // Verify clone has same data
-    try std.testing.expectEqualSlices(u8, &pixel, cloned.getPixel(2, 2));
-
-    // Modify original, verify clone is independent
-    const new_pixel = [_]u8{ 0, 0, 0 };
-    img.setPixel(2, 2, &new_pixel);
-    try std.testing.expectEqualSlices(u8, &pixel, cloned.getPixel(2, 2));
 }
 
 test "Image.crop extracts correct region" {

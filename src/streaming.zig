@@ -36,21 +36,8 @@ pub const PngRowWriter = struct {
         try writer.writeAll(&decode_context.PNG_SIGNATURE);
 
         // Write IHDR chunk
-        var ihdr_data: [13]u8 = undefined;
-        std.mem.writeInt(u32, ihdr_data[0..4], width, .big);
-        std.mem.writeInt(u32, ihdr_data[4..8], height, .big);
-        ihdr_data[8] = 8; // bit depth
-        ihdr_data[9] = switch (channels) {
-            1 => 0,
-            2 => 4,
-            3 => 2,
-            4 => 6,
-            else => 2,
-        };
-        ihdr_data[10] = 0; // compression
-        ihdr_data[11] = 0; // filter
-        ihdr_data[12] = 0; // interlace
-        try writeChunk(writer, "IHDR", &ihdr_data);
+        var ihdr_data = png.buildIhdrData(width, height, channels);
+        try png.writeChunk(writer, decode_context.ChunkType.IHDR, &ihdr_data);
 
         return Self{
             .allocator = allocator,
@@ -91,28 +78,46 @@ pub const PngRowWriter = struct {
         defer self.allocator.free(compressed);
 
         // Write IDAT chunk
-        try writeChunk(self.writer, "IDAT", compressed);
+        try png.writeChunk(self.writer, decode_context.ChunkType.IDAT, compressed);
 
         // Write IEND chunk
-        try writeChunk(self.writer, "IEND", &.{});
+        try png.writeChunk(self.writer, decode_context.ChunkType.IEND, &.{});
 
         try self.writer.flush();
     }
 };
 
-fn writeChunk(writer: *std.Io.Writer, chunk_type: *const [4]u8, data: []const u8) !void {
-    var len_buf: [4]u8 = undefined;
-    std.mem.writeInt(u32, &len_buf, @intCast(data.len), .big);
-    try writer.writeAll(&len_buf);
-    try writer.writeAll(chunk_type);
-    try writer.writeAll(data);
+/// Bilinear interpolation for a single output row.
+/// Given two source rows and vertical weight, produces one output row.
+fn bilinearInterpolateRow(
+    output_row: []u8,
+    row0: []const u8,
+    row1: []const u8,
+    y_weight: f64,
+    src_width: u32,
+    new_width: u32,
+    channels: usize,
+    x_ratio: f64,
+) void {
+    for (0..new_width) |dst_x| {
+        const src_x_f = (@as(f64, @floatFromInt(dst_x)) + 0.5) * x_ratio - 0.5;
+        const x0 = @as(u32, @intFromFloat(@max(0, @floor(src_x_f))));
+        const x1 = @min(x0 + 1, src_width - 1);
+        const x_weight = src_x_f - @floor(src_x_f);
 
-    var crc = std.hash.Crc32.init();
-    crc.update(chunk_type);
-    crc.update(data);
-    var crc_buf: [4]u8 = undefined;
-    std.mem.writeInt(u32, &crc_buf, crc.final(), .big);
-    try writer.writeAll(&crc_buf);
+        for (0..channels) |c| {
+            const p00 = @as(f64, @floatFromInt(row0[x0 * channels + c]));
+            const p10 = @as(f64, @floatFromInt(row0[x1 * channels + c]));
+            const p01 = @as(f64, @floatFromInt(row1[x0 * channels + c]));
+            const p11 = @as(f64, @floatFromInt(row1[x1 * channels + c]));
+
+            const top = p00 * (1.0 - x_weight) + p10 * x_weight;
+            const bottom = p01 * (1.0 - x_weight) + p11 * x_weight;
+            const value = top * (1.0 - y_weight) + bottom * y_weight;
+
+            output_row[dst_x * channels + c] = @intFromFloat(@round(@max(0, @min(255, value))));
+        }
+    }
 }
 
 // ============================================================================
@@ -308,26 +313,7 @@ pub fn streamingResizeLowMem(
             unreachable;
         };
 
-        // Bilinear interpolation for this output row
-        for (0..new_width) |dst_x| {
-            const src_x_f = (@as(f64, @floatFromInt(dst_x)) + 0.5) * x_ratio - 0.5;
-            const x0 = @as(u32, @intFromFloat(@max(0, @floor(src_x_f))));
-            const x1 = @min(x0 + 1, ctx.width - 1);
-            const x_weight = src_x_f - @floor(src_x_f);
-
-            for (0..channels) |c| {
-                const p00 = @as(f64, @floatFromInt(row0[x0 * channels + c]));
-                const p10 = @as(f64, @floatFromInt(row0[x1 * channels + c]));
-                const p01 = @as(f64, @floatFromInt(row1[x0 * channels + c]));
-                const p11 = @as(f64, @floatFromInt(row1[x1 * channels + c]));
-
-                const top = p00 * (1.0 - x_weight) + p10 * x_weight;
-                const bottom = p01 * (1.0 - x_weight) + p11 * x_weight;
-                const value = top * (1.0 - y_weight) + bottom * y_weight;
-
-                output_row[dst_x * channels + c] = @intFromFloat(@round(@max(0, @min(255, value))));
-            }
-        }
+        bilinearInterpolateRow(output_row, row0, row1, y_weight, ctx.width, new_width, channels, x_ratio);
 
         try row_writer.writeRow(output_row);
     }
@@ -414,26 +400,7 @@ pub fn streamingResizeUltraLowMem(
         const row0 = if (cached_rows[0] == y0) row_cache[0] else row_cache[1];
         const row1 = if (cached_rows[0] == y1) row_cache[0] else row_cache[1];
 
-        // Bilinear interpolation
-        for (0..new_width) |dst_x| {
-            const src_x_f = (@as(f64, @floatFromInt(dst_x)) + 0.5) * x_ratio - 0.5;
-            const x0 = @as(u32, @intFromFloat(@max(0, @floor(src_x_f))));
-            const x1 = @min(x0 + 1, src_width - 1);
-            const x_weight = src_x_f - @floor(src_x_f);
-
-            for (0..channels) |c| {
-                const p00 = @as(f64, @floatFromInt(row0[x0 * channels + c]));
-                const p10 = @as(f64, @floatFromInt(row0[x1 * channels + c]));
-                const p01 = @as(f64, @floatFromInt(row1[x0 * channels + c]));
-                const p11 = @as(f64, @floatFromInt(row1[x1 * channels + c]));
-
-                const top = p00 * (1.0 - x_weight) + p10 * x_weight;
-                const bottom = p01 * (1.0 - x_weight) + p11 * x_weight;
-                const value = top * (1.0 - y_weight) + bottom * y_weight;
-
-                output_row[dst_x * channels + c] = @intFromFloat(@round(@max(0, @min(255, value))));
-            }
-        }
+        bilinearInterpolateRow(output_row, row0, row1, y_weight, src_width, new_width, channels, x_ratio);
 
         try row_writer.writeRow(output_row);
     }
@@ -510,34 +477,14 @@ pub fn streamingResize(
     const x_ratio = src_w / dst_w;
     const y_ratio = src_h / dst_h;
 
+    const ch = @as(usize, ctx.channels);
     for (0..new_height) |dst_y| {
-        for (0..new_width) |dst_x| {
-            const src_x_f = (@as(f64, @floatFromInt(dst_x)) + 0.5) * x_ratio - 0.5;
-            const src_y_f = (@as(f64, @floatFromInt(dst_y)) + 0.5) * y_ratio - 0.5;
+        const src_y_f = (@as(f64, @floatFromInt(dst_y)) + 0.5) * y_ratio - 0.5;
+        const y0 = @as(u32, @intFromFloat(@max(0, @floor(src_y_f))));
+        const y1 = @min(y0 + 1, ctx.height - 1);
+        const y_weight = src_y_f - @floor(src_y_f);
 
-            const x0 = @as(u32, @intFromFloat(@max(0, @floor(src_x_f))));
-            const y0 = @as(u32, @intFromFloat(@max(0, @floor(src_y_f))));
-            const x1 = @min(x0 + 1, ctx.width - 1);
-            const y1 = @min(y0 + 1, ctx.height - 1);
-
-            const x_weight = src_x_f - @floor(src_x_f);
-            const y_weight = src_y_f - @floor(src_y_f);
-
-            // Get pixels from decoded rows
-            const ch = @as(usize, ctx.channels);
-            for (0..ch) |c| {
-                const p00 = @as(f64, @floatFromInt(decoded_rows[y0][x0 * ch + c]));
-                const p10 = @as(f64, @floatFromInt(decoded_rows[y0][x1 * ch + c]));
-                const p01 = @as(f64, @floatFromInt(decoded_rows[y1][x0 * ch + c]));
-                const p11 = @as(f64, @floatFromInt(decoded_rows[y1][x1 * ch + c]));
-
-                const top = p00 * (1.0 - x_weight) + p10 * x_weight;
-                const bottom = p01 * (1.0 - x_weight) + p11 * x_weight;
-                const value = top * (1.0 - y_weight) + bottom * y_weight;
-
-                output_row[dst_x * ch + c] = @intFromFloat(@round(@max(0, @min(255, value))));
-            }
-        }
+        bilinearInterpolateRow(output_row, decoded_rows[y0], decoded_rows[y1], y_weight, ctx.width, new_width, ch, x_ratio);
 
         try row_writer.writeRow(output_row);
     }
@@ -614,33 +561,14 @@ pub fn streamingThumbnail(
     const dst_size = @as(f64, @floatFromInt(size));
     const ratio = src_size / dst_size;
 
+    const ch = @as(usize, ctx.channels);
     for (0..size) |dst_y| {
-        for (0..size) |dst_x| {
-            const src_x_f = (@as(f64, @floatFromInt(dst_x)) + 0.5) * ratio - 0.5;
-            const src_y_f = (@as(f64, @floatFromInt(dst_y)) + 0.5) * ratio - 0.5;
+        const src_y_f = (@as(f64, @floatFromInt(dst_y)) + 0.5) * ratio - 0.5;
+        const y0 = @as(u32, @intFromFloat(@max(0, @floor(src_y_f))));
+        const y1 = @min(y0 + 1, min_dim - 1);
+        const y_weight = src_y_f - @floor(src_y_f);
 
-            const x0 = @as(u32, @intFromFloat(@max(0, @floor(src_x_f))));
-            const y0 = @as(u32, @intFromFloat(@max(0, @floor(src_y_f))));
-            const x1 = @min(x0 + 1, min_dim - 1);
-            const y1 = @min(y0 + 1, min_dim - 1);
-
-            const x_weight = src_x_f - @floor(src_x_f);
-            const y_weight = src_y_f - @floor(src_y_f);
-
-            const ch = @as(usize, ctx.channels);
-            for (0..ch) |c| {
-                const p00 = @as(f64, @floatFromInt(cropped_rows[y0][x0 * ch + c]));
-                const p10 = @as(f64, @floatFromInt(cropped_rows[y0][x1 * ch + c]));
-                const p01 = @as(f64, @floatFromInt(cropped_rows[y1][x0 * ch + c]));
-                const p11 = @as(f64, @floatFromInt(cropped_rows[y1][x1 * ch + c]));
-
-                const top = p00 * (1.0 - x_weight) + p10 * x_weight;
-                const bottom = p01 * (1.0 - x_weight) + p11 * x_weight;
-                const value = top * (1.0 - y_weight) + bottom * y_weight;
-
-                output_row[dst_x * ch + c] = @intFromFloat(@round(@max(0, @min(255, value))));
-            }
-        }
+        bilinearInterpolateRow(output_row, cropped_rows[y0], cropped_rows[y1], y_weight, min_dim, size, ch, ratio);
 
         try row_writer.writeRow(output_row);
     }

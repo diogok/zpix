@@ -49,6 +49,27 @@ fn writeOut(msg: []const u8) void {
     _ = std.fs.File.stdout().write(msg) catch {};
 }
 
+fn parseIntOrExit(value: []const u8, field_name: []const u8) u32 {
+    return std.fmt.parseInt(u32, value, 10) catch {
+        printErrFmt("Error: invalid {s}\n", .{field_name});
+        std.process.exit(1);
+    };
+}
+
+fn loadImageOrExit(allocator: std.mem.Allocator, path: []const u8) stbz.Image {
+    return stbz.loadPngFile(allocator, path) catch |err| {
+        printErrFmt("Error loading {s}: {}\n", .{ path, err });
+        std.process.exit(1);
+    };
+}
+
+fn saveImageOrExit(path: []const u8, img: *const stbz.Image) void {
+    stbz.savePngFile(img, path) catch |err| {
+        printErrFmt("Error saving {s}: {}\n", .{ path, err });
+        std.process.exit(1);
+    };
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -91,27 +112,12 @@ fn runCrop(allocator: std.mem.Allocator, args: []const []const u8) void {
 
     const input_path = args[2];
     const output_path = args[3];
-    const x = std.fmt.parseInt(u32, args[4], 10) catch {
-        writeErr("Error: invalid x coordinate\n");
-        std.process.exit(1);
-    };
-    const y = std.fmt.parseInt(u32, args[5], 10) catch {
-        writeErr("Error: invalid y coordinate\n");
-        std.process.exit(1);
-    };
-    const width = std.fmt.parseInt(u32, args[6], 10) catch {
-        writeErr("Error: invalid width\n");
-        std.process.exit(1);
-    };
-    const height = std.fmt.parseInt(u32, args[7], 10) catch {
-        writeErr("Error: invalid height\n");
-        std.process.exit(1);
-    };
+    const x = parseIntOrExit(args[4], "x coordinate");
+    const y = parseIntOrExit(args[5], "y coordinate");
+    const width = parseIntOrExit(args[6], "width");
+    const height = parseIntOrExit(args[7], "height");
 
-    var img = stbz.loadPngFile(allocator, input_path) catch |err| {
-        printErrFmt("Error loading {s}: {}\n", .{ input_path, err });
-        std.process.exit(1);
-    };
+    var img = loadImageOrExit(allocator, input_path);
     defer img.deinit();
 
     var cropped = img.crop(x, y, width, height) catch |err| {
@@ -120,10 +126,7 @@ fn runCrop(allocator: std.mem.Allocator, args: []const []const u8) void {
     };
     defer cropped.deinit();
 
-    savePng(output_path, &cropped) catch |err| {
-        printErrFmt("Error saving {s}: {}\n", .{ output_path, err });
-        std.process.exit(1);
-    };
+    saveImageOrExit(output_path, &cropped);
     printFmt("Cropped {s} -> {s} ({d}x{d})\n", .{ input_path, output_path, width, height });
 }
 
@@ -135,19 +138,10 @@ fn runResize(allocator: std.mem.Allocator, args: []const []const u8) void {
 
     const input_path = args[2];
     const output_path = args[3];
-    const width = std.fmt.parseInt(u32, args[4], 10) catch {
-        writeErr("Error: invalid width\n");
-        std.process.exit(1);
-    };
-    const height = std.fmt.parseInt(u32, args[5], 10) catch {
-        writeErr("Error: invalid height\n");
-        std.process.exit(1);
-    };
+    const width = parseIntOrExit(args[4], "width");
+    const height = parseIntOrExit(args[5], "height");
 
-    var img = stbz.loadPngFile(allocator, input_path) catch |err| {
-        printErrFmt("Error loading {s}: {}\n", .{ input_path, err });
-        std.process.exit(1);
-    };
+    var img = loadImageOrExit(allocator, input_path);
     defer img.deinit();
 
     var resized = img.resize(width, height) catch |err| {
@@ -156,10 +150,7 @@ fn runResize(allocator: std.mem.Allocator, args: []const []const u8) void {
     };
     defer resized.deinit();
 
-    savePng(output_path, &resized) catch |err| {
-        printErrFmt("Error saving {s}: {}\n", .{ output_path, err });
-        std.process.exit(1);
-    };
+    saveImageOrExit(output_path, &resized);
     printFmt("Resized {s} -> {s} ({d}x{d})\n", .{ input_path, output_path, width, height });
 }
 
@@ -171,18 +162,11 @@ fn runThumbnail(allocator: std.mem.Allocator, args: []const []const u8) void {
 
     const input_path = args[2];
     const output_path = args[3];
-    const size = std.fmt.parseInt(u32, args[4], 10) catch {
-        writeErr("Error: invalid size\n");
-        std.process.exit(1);
-    };
+    const size = parseIntOrExit(args[4], "size");
 
-    var img = stbz.loadPngFile(allocator, input_path) catch |err| {
-        printErrFmt("Error loading {s}: {}\n", .{ input_path, err });
-        std.process.exit(1);
-    };
+    var img = loadImageOrExit(allocator, input_path);
     defer img.deinit();
 
-    // Crop to center square first
     const min_dim = @min(img.width, img.height);
     const crop_x = (img.width - min_dim) / 2;
     const crop_y = (img.height - min_dim) / 2;
@@ -193,17 +177,13 @@ fn runThumbnail(allocator: std.mem.Allocator, args: []const []const u8) void {
     };
     defer cropped.deinit();
 
-    // Then resize to target size
     var thumbnail = cropped.resize(size, size) catch |err| {
         printErrFmt("Error resizing: {}\n", .{err});
         std.process.exit(1);
     };
     defer thumbnail.deinit();
 
-    savePng(output_path, &thumbnail) catch |err| {
-        printErrFmt("Error saving {s}: {}\n", .{ output_path, err });
-        std.process.exit(1);
-    };
+    saveImageOrExit(output_path, &thumbnail);
     printFmt("Thumbnail {s} -> {s} ({d}x{d})\n", .{ input_path, output_path, size, size });
 }
 
@@ -216,15 +196,9 @@ fn runRotate(allocator: std.mem.Allocator, args: []const []const u8) void {
 
     const input_path = args[2];
     const output_path = args[3];
-    const angle = std.fmt.parseInt(u32, args[4], 10) catch {
-        writeErr("Error: invalid angle\n");
-        std.process.exit(1);
-    };
+    const angle = parseIntOrExit(args[4], "angle");
 
-    var img = stbz.loadPngFile(allocator, input_path) catch |err| {
-        printErrFmt("Error loading {s}: {}\n", .{ input_path, err });
-        std.process.exit(1);
-    };
+    var img = loadImageOrExit(allocator, input_path);
     defer img.deinit();
 
     var rotated = switch (angle) {
@@ -247,10 +221,7 @@ fn runRotate(allocator: std.mem.Allocator, args: []const []const u8) void {
     };
     defer rotated.deinit();
 
-    savePng(output_path, &rotated) catch |err| {
-        printErrFmt("Error saving {s}: {}\n", .{ output_path, err });
-        std.process.exit(1);
-    };
+    saveImageOrExit(output_path, &rotated);
     printFmt("Rotated {s} -> {s} ({d}° clockwise)\n", .{ input_path, output_path, angle });
 }
 
@@ -264,23 +235,18 @@ fn runFlip(allocator: std.mem.Allocator, args: []const []const u8) void {
     const input_path = args[2];
     const output_path = args[3];
     const direction = args[4];
+    const horizontal = std.mem.eql(u8, direction, "h") or std.mem.eql(u8, direction, "horizontal");
+    const vertical = std.mem.eql(u8, direction, "v") or std.mem.eql(u8, direction, "vertical");
 
-    var img = stbz.loadPngFile(allocator, input_path) catch |err| {
-        printErrFmt("Error loading {s}: {}\n", .{ input_path, err });
-        std.process.exit(1);
-    };
-    defer img.deinit();
-
-    const dir_name: []const u8 = if (std.mem.eql(u8, direction, "h") or std.mem.eql(u8, direction, "horizontal"))
-        "horizontally"
-    else if (std.mem.eql(u8, direction, "v") or std.mem.eql(u8, direction, "vertical"))
-        "vertically"
-    else {
+    if (!horizontal and !vertical) {
         writeErr("Error: direction must be 'h' (horizontal) or 'v' (vertical)\n");
         std.process.exit(1);
-    };
+    }
 
-    var flipped = if (std.mem.eql(u8, direction, "h") or std.mem.eql(u8, direction, "horizontal"))
+    var img = loadImageOrExit(allocator, input_path);
+    defer img.deinit();
+
+    var flipped = if (horizontal)
         img.flipHorizontal() catch |err| {
             printErrFmt("Error flipping: {}\n", .{err});
             std.process.exit(1);
@@ -292,13 +258,8 @@ fn runFlip(allocator: std.mem.Allocator, args: []const []const u8) void {
         };
     defer flipped.deinit();
 
-    savePng(output_path, &flipped) catch |err| {
-        printErrFmt("Error saving {s}: {}\n", .{ output_path, err });
-        std.process.exit(1);
-    };
+    saveImageOrExit(output_path, &flipped);
+    const dir_name: []const u8 = if (horizontal) "horizontally" else "vertically";
     printFmt("Flipped {s} -> {s} ({s})\n", .{ input_path, output_path, dir_name });
 }
 
-fn savePng(path: []const u8, img: *const stbz.Image) !void {
-    try stbz.savePngFile(img, path);
-}

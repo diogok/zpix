@@ -34,10 +34,6 @@ const Marker = struct {
     const APP1: u16 = 0xFFE1;
     const COM: u16 = 0xFFFE;
 
-    fn isRST(m: u16) bool {
-        return m >= 0xFFD0 and m <= 0xFFD7;
-    }
-
     fn isAPP(m: u16) bool {
         return m >= 0xFFE0 and m <= 0xFFEF;
     }
@@ -141,14 +137,6 @@ const BitReader = struct {
             .bit_buf = 0,
             .bits_left = 0,
         };
-    }
-
-    fn fillBits(self: *BitReader) void {
-        while (self.bits_left <= 24) {
-            const byte = self.getNextByte();
-            self.bit_buf |= @as(u32, byte) << @intCast(24 - self.bits_left);
-            self.bits_left += 8;
-        }
     }
 
     fn getNextByte(self: *BitReader) u8 {

@@ -12,9 +12,6 @@ pub const ChunkType = decode_context.ChunkType;
 pub const Adam7 = decode_context.Adam7;
 pub const applyFilter = decode_context.applyFilter;
 
-// Legacy error type for backwards compatibility
-pub const PngError = DecodeError;
-
 /// Core decoder: reads PNG from any std.Io.Reader
 pub fn decode(allocator: Allocator, reader: *std.Io.Reader) !Image {
     var ctx = try PngDecodeContext.init(allocator, reader);
@@ -164,18 +161,12 @@ pub fn saveToFile(img: *const Image, path: []const u8) !void {
 
 /// Save PNG to memory buffer (convenience wrapper)
 pub fn saveToMemory(allocator: Allocator, img: *const Image) ![]u8 {
-    var output: std.ArrayList(u8) = .empty;
-    errdefer output.deinit(allocator);
-
-    try output.appendSlice(allocator, &PNG_SIGNATURE);
-    try writeIhdrChunkToList(allocator, &output, img.width, img.height, img.channels);
-    try writeIdatChunksToList(allocator, &output, img);
-    try writeIendChunkToList(allocator, &output);
-
-    return output.toOwnedSlice(allocator);
+    var out_writer: std.Io.Writer.Allocating = .init(allocator);
+    try encode(allocator, img, &out_writer.writer);
+    return out_writer.toOwnedSlice();
 }
 
-fn writeChunk(writer: *std.Io.Writer, chunk_type: [4]u8, data: []const u8) !void {
+pub fn writeChunk(writer: *std.Io.Writer, chunk_type: [4]u8, data: []const u8) !void {
     // Length (4 bytes, big endian)
     var len_buf: [4]u8 = undefined;
     std.mem.writeInt(u32, &len_buf, @intCast(data.len), .big);
@@ -196,9 +187,8 @@ fn writeChunk(writer: *std.Io.Writer, chunk_type: [4]u8, data: []const u8) !void
     try writer.writeAll(&crc_buf);
 }
 
-fn writeIhdrChunk(writer: *std.Io.Writer, width: u32, height: u32, channels: u8) !void {
+pub fn buildIhdrData(width: u32, height: u32, channels: u8) [13]u8 {
     var ihdr_data: [13]u8 = undefined;
-
     std.mem.writeInt(u32, ihdr_data[0..4], width, .big);
     std.mem.writeInt(u32, ihdr_data[4..8], height, .big);
     ihdr_data[8] = 8;
@@ -212,7 +202,11 @@ fn writeIhdrChunk(writer: *std.Io.Writer, width: u32, height: u32, channels: u8)
     ihdr_data[10] = 0;
     ihdr_data[11] = 0;
     ihdr_data[12] = 0;
+    return ihdr_data;
+}
 
+fn writeIhdrChunk(writer: *std.Io.Writer, width: u32, height: u32, channels: u8) !void {
+    var ihdr_data = buildIhdrData(width, height, channels);
     try writeChunk(writer, ChunkType.IHDR, &ihdr_data);
 }
 
@@ -240,62 +234,6 @@ fn writeIdatChunks(allocator: Allocator, writer: *std.Io.Writer, img: *const Ima
 
 fn writeIendChunk(writer: *std.Io.Writer) !void {
     try writeChunk(writer, ChunkType.IEND, &.{});
-}
-
-// ArrayList-based versions for saveToMemory
-fn writeChunkToList(allocator: Allocator, output: *std.ArrayList(u8), chunk_type: [4]u8, data: []const u8) !void {
-    var len_buf: [4]u8 = undefined;
-    std.mem.writeInt(u32, &len_buf, @intCast(data.len), .big);
-    try output.appendSlice(allocator, &len_buf);
-    try output.appendSlice(allocator, &chunk_type);
-    try output.appendSlice(allocator, data);
-
-    var crc = std.hash.Crc32.init();
-    crc.update(&chunk_type);
-    crc.update(data);
-    var crc_buf: [4]u8 = undefined;
-    std.mem.writeInt(u32, &crc_buf, crc.final(), .big);
-    try output.appendSlice(allocator, &crc_buf);
-}
-
-fn writeIhdrChunkToList(allocator: Allocator, output: *std.ArrayList(u8), width: u32, height: u32, channels: u8) !void {
-    var ihdr_data: [13]u8 = undefined;
-    std.mem.writeInt(u32, ihdr_data[0..4], width, .big);
-    std.mem.writeInt(u32, ihdr_data[4..8], height, .big);
-    ihdr_data[8] = 8;
-    ihdr_data[9] = switch (channels) {
-        1 => 0,
-        2 => 4,
-        3 => 2,
-        4 => 6,
-        else => 2,
-    };
-    ihdr_data[10] = 0;
-    ihdr_data[11] = 0;
-    ihdr_data[12] = 0;
-    try writeChunkToList(allocator, output, ChunkType.IHDR, &ihdr_data);
-}
-
-fn writeIdatChunksToList(allocator: Allocator, output: *std.ArrayList(u8), img: *const Image) !void {
-    const stride = @as(usize, img.width) * @as(usize, img.channels);
-    const filtered_size = @as(usize, img.height) * (stride + 1);
-    const filtered = try allocator.alloc(u8, filtered_size);
-    defer allocator.free(filtered);
-
-    for (0..img.height) |y| {
-        const out_start = y * (stride + 1);
-        const in_start = y * stride;
-        filtered[out_start] = 0;
-        @memcpy(filtered[out_start + 1 ..][0..stride], img.data[in_start..][0..stride]);
-    }
-
-    const compressed = try compressZlib(allocator, filtered);
-    defer allocator.free(compressed);
-    try writeChunkToList(allocator, output, ChunkType.IDAT, compressed);
-}
-
-fn writeIendChunkToList(allocator: Allocator, output: *std.ArrayList(u8)) !void {
-    try writeChunkToList(allocator, output, ChunkType.IEND, &.{});
 }
 
 /// Compress data using zlib format with fixed Huffman encoding.

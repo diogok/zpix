@@ -21,35 +21,22 @@ pub const loadJpegFile = jpeg.loadFromFile;
 pub const loadJpegMemory = jpeg.loadFromMemory;
 
 // ============================================================================
-// Low-Memory Streaming Operations (row-by-row processing)
+// Low-Memory Streaming Operations
 // ============================================================================
+//
+// Use these for large images on memory-constrained systems.
+// For typical use cases, prefer the simpler Image API.
 
-/// Streaming crop with minimal memory - O(width) memory
-pub const streamingCrop = streaming.streamingCrop;
-
-/// Streaming resize - keeps all decoded rows in memory
-/// For lower memory usage, see streamingResizeLowMem
+/// Streaming resize with incremental decompression.
+/// Memory: O(compressed_size + width) instead of O(width × height)
+/// See streaming.zig for details and trade-offs.
 pub const streamingResize = streaming.streamingResize;
 
-/// Streaming resize with 2-row sliding window - O(width) memory
-/// Inspired by libvips' demand-driven architecture
-pub const streamingResizeLowMem = streaming.streamingResizeLowMem;
-
-/// Ultra-low memory resize with incremental decompression
-/// Memory: O(compressed_size + width * 4) - decompresses on demand
-pub const streamingResizeUltraLowMem = streaming.streamingResizeUltraLowMem;
-
-/// Streaming thumbnail - keeps cropped rows in memory
-pub const streamingThumbnail = streaming.streamingThumbnail;
-
-/// Streaming PNG decoder - decompresses row-by-row
+/// Streaming PNG decoder - decompresses row-by-row on demand
 pub const PngStreamingDecoder = streaming.PngStreamingDecoder;
 
-/// Row-by-row PNG writer
+/// Row-by-row PNG writer for custom streaming operations
 pub const PngRowWriter = streaming.PngRowWriter;
-
-/// PNG header info
-pub const PngInfo = streaming.PngInfo;
 
 test {
     std.testing.refAllDecls(@This());

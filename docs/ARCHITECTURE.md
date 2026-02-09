@@ -76,23 +76,21 @@ stbz.resizeStream(allocator, reader, writer, w, h);
 
 Still decodes the full image internally, but avoids needing a file path. Located in `streaming.zig`.
 
-### 3. Low-Memory Streaming API — O(width) memory
+### 3. Low-Memory Streaming API
 
 ```zig
-stbz.streamingCrop(allocator, reader, writer, x, y, w, h);
-stbz.streamingResizeLowMem(allocator, reader, writer, w, h);
-stbz.streamingResizeUltraLowMem(allocator, reader, writer, w, h);
+stbz.streamingResize(allocator, reader, writer, w, h);
 ```
 
-Processes rows one at a time using a 2-row sliding window for bilinear interpolation. For a 10000×10000 RGB image, memory drops from ~300 MB to ~120 KB. Located in `streaming.zig` using `PngStreamingDecoder` from `decode_context.zig`.
+Processes images with low memory usage using incremental decompression and row-by-row processing. For a 4000×3000 RGB image, memory drops from ~36 MB (full decode) to ~3.6 MB (compressed data + row buffers). Located in `streaming.zig` using `PngStreamingDecoder` from `decode_context.zig`.
 
-## Resize Variants
+## Streaming API Components
 
-| Function | Memory | How |
+| Component | Purpose | Memory |
 |---|---|---|
-| `streamingResize` | O(W×H) | Decodes all rows, random access |
-| `streamingResizeLowMem` | O(W) | 2-row sliding window, sequential decode |
-| `streamingResizeUltraLowMem` | O(compressed + W) | Holds compressed data, decompresses on the fly |
+| `streamingResize` | Resize with bilinear interpolation | O(compressed_size + width) |
+| `PngStreamingDecoder` | Row-by-row PNG decoding | O(compressed_size + width) |
+| `PngRowWriter` | Row-by-row PNG encoding | O(width) |
 
 ## Format Support
 

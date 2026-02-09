@@ -409,53 +409,16 @@ Streaming operations process images with minimal memory usage by working row-by-
 
 ### Memory Usage Comparison
 
-For a 10000×10000 RGB image:
+For a 4000×3000 RGB image:
 
 | Operation | Memory Usage |
 |-----------|--------------|
-| `loadPngFile` + `crop` | ~300 MB |
-| `streamingCrop` | ~120 KB |
-| `streamingResizeLowMem` | ~180 KB |
-| `streamingResizeUltraLowMem` | ~60 KB + compressed size |
-
-### `streamingCrop`
-
-Crop a PNG with minimal memory (O(width) memory).
-
-```zig
-pub fn streamingCrop(
-    allocator: Allocator,
-    reader: *std.Io.Reader,
-    writer: *std.Io.Writer,
-    x: u32,
-    y: u32,
-    crop_width: u32,
-    crop_height: u32,
-) !void
-```
-
-**Memory:** Only allocates buffers for one row at a time
-
-**Example:**
-```zig
-var in_file = try std.fs.cwd().openFile("large.png", .{});
-defer in_file.close();
-var out_file = try std.fs.cwd().createFile("cropped.png", .{});
-defer out_file.close();
-
-var in_buf: [8192]u8 = undefined;
-var out_buf: [8192]u8 = undefined;
-var reader = in_file.reader(&in_buf);
-var writer = out_file.writer(&out_buf);
-
-try stbz.streamingCrop(allocator, &reader.interface, &writer.interface,
-    1000, 1000, 2000, 2000);
-try writer.interface.flush();
-```
+| `Image.resize()` | ~36 MB (full decoded image) |
+| `streamingResize()` | ~3.6 MB (compressed PNG + row buffers) |
 
 ### `streamingResize`
 
-Resize a PNG keeping all decoded rows in memory.
+Resize a PNG with low memory usage using incremental decompression.
 
 ```zig
 pub fn streamingResize(
@@ -467,60 +430,25 @@ pub fn streamingResize(
 ) !void
 ```
 
-**Memory:** O(source_width × source_height × channels)
-
-### `streamingResizeLowMem`
-
-Resize with a 2-row sliding window (O(width) memory).
-
-```zig
-pub fn streamingResizeLowMem(
-    allocator: Allocator,
-    reader: *std.Io.Reader,
-    writer: *std.Io.Writer,
-    new_width: u32,
-    new_height: u32,
-) !void
-```
-
-**Memory:** O(source_width × channels)
-
-**Note:** Uses bilinear interpolation with on-the-fly row computation
-
-### `streamingResizeUltraLowMem`
-
-Ultra-low memory resize with incremental decompression.
-
-```zig
-pub fn streamingResizeUltraLowMem(
-    allocator: Allocator,
-    reader: *std.Io.Reader,
-    writer: *std.Io.Writer,
-    new_width: u32,
-    new_height: u32,
-) !void
-```
-
 **Memory:** O(compressed_size + width × channels)
 
-**Note:** Decompresses rows on demand for minimal memory usage
+**Algorithm:** Bilinear interpolation with row-by-row processing
 
-### `streamingThumbnail`
-
-Create a square thumbnail with center cropping and resizing.
-
+**Example:**
 ```zig
-pub fn streamingThumbnail(
-    allocator: Allocator,
-    reader: *std.Io.Reader,
-    writer: *std.Io.Writer,
-    size: u32,
-) !void
-```
+var in_file = try std.fs.cwd().openFile("large.png", .{});
+defer in_file.close();
+var out_file = try std.fs.cwd().createFile("resized.png", .{});
+defer out_file.close();
 
-**Behavior:**
-1. Crops to center square (min(width, height) × min(width, height))
-2. Resizes to `size × size`
+var in_buf: [8192]u8 = undefined;
+var out_buf: [8192]u8 = undefined;
+var reader = in_file.reader(&in_buf);
+var writer = out_file.writer(&out_buf);
+
+try stbz.streamingResize(allocator, &reader.interface, &writer.interface, 800, 600);
+try writer.interface.flush();
+```
 
 ### Advanced Streaming Types
 

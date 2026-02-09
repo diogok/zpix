@@ -5,24 +5,37 @@ const decode_context = @import("decode_context.zig");
 
 // Re-export shared types
 pub const DecodeError = decode_context.DecodeError;
-pub const PngDecodeContext = decode_context.PngDecodeContext;
 pub const PngStreamingDecoder = decode_context.PngStreamingDecoder;
-pub const applyFilter = decode_context.applyFilter;
 
-/// PNG header information needed for streaming
-pub const PngInfo = struct {
-    width: u32,
-    height: u32,
-    channels: u8,
-};
+/// Streaming operations for low-memory image processing.
+///
+/// Use these functions when processing large images with limited memory.
+/// For typical use cases, prefer the simpler Image API (Image.resize, Image.crop, etc).
+///
+/// Memory comparison for a 4000×3000 RGB image:
+/// - Standard Image.resize(): ~36MB (full decoded image)
+/// - streamingResize(): ~3.6MB (compressed PNG + 2 row buffers)
+///
+/// Trade-offs:
+/// - ✓ Dramatically lower memory usage
+/// - ✓ Works on memory-constrained systems
+/// - ✗ Cannot seek backward (sequential processing only)
+/// - ✗ More complex API
 
-/// Row-by-row PNG writer
+// ============================================================================
+// Helper utilities for row-based PNG operations
+// ============================================================================
+
+/// Row-by-row PNG writer for custom streaming operations.
+/// Useful if you need to generate PNG output incrementally.
 pub const PngRowWriter = struct {
     const Self = @This();
 
     allocator: Allocator,
     writer: *std.Io.Writer,
-    info: PngInfo,
+    width: u32,
+    height: u32,
+    channels: u8,
     prev_row: []u8,
     current_row: u32,
     idat_buffer: std.ArrayList(u8),
@@ -42,11 +55,9 @@ pub const PngRowWriter = struct {
         return Self{
             .allocator = allocator,
             .writer = writer,
-            .info = .{
-                .width = width,
-                .height = height,
-                .channels = channels,
-            },
+            .width = width,
+            .height = height,
+            .channels = channels,
             .prev_row = prev_row,
             .current_row = 0,
             .idat_buffer = .empty,
@@ -60,7 +71,7 @@ pub const PngRowWriter = struct {
 
     /// Write a row of pixel data
     pub fn writeRow(self: *Self, row: []const u8) !void {
-        const stride = @as(usize, self.info.width) * @as(usize, self.info.channels);
+        const stride = @as(usize, self.width) * @as(usize, self.channels);
         if (row.len != stride) return error.InvalidRowLength;
 
         // Add filter byte (0 = None) and row data to buffer
@@ -121,216 +132,21 @@ fn bilinearInterpolateRow(
 }
 
 // ============================================================================
-// Streaming Operations - Memory efficient (O(rows) instead of O(image))
+// Streaming Operations - Truly low-memory processing
 // ============================================================================
 
-/// Streaming crop - reads PNG row by row, outputs cropped PNG
-/// Memory usage: O(width * channels * 2) instead of O(width * height * channels)
-pub fn streamingCrop(
-    allocator: Allocator,
-    reader: *std.Io.Reader,
-    writer: *std.Io.Writer,
-    crop_x: u32,
-    crop_y: u32,
-    crop_width: u32,
-    crop_height: u32,
-) !void {
-    // Use shared context for parsing
-    var ctx = try PngDecodeContext.init(allocator, reader);
-    defer ctx.deinit();
-
-    // Validate crop bounds
-    if (crop_x + crop_width > ctx.width or crop_y + crop_height > ctx.height) {
-        return DecodeError.CropOutOfBounds;
-    }
-
-    // Process row by row with minimal memory
-    const src_stride = @as(usize, ctx.width) * @as(usize, ctx.channels);
-    const dst_stride = @as(usize, crop_width) * @as(usize, ctx.channels);
-
-    // Only allocate 2 rows for filtering + 1 output row
-    var prev_row = try allocator.alloc(u8, src_stride);
-    defer allocator.free(prev_row);
-    @memset(prev_row, 0);
-
-    var current_row = try allocator.alloc(u8, src_stride);
-    defer allocator.free(current_row);
-
-    const output_row = try allocator.alloc(u8, dst_stride);
-    defer allocator.free(output_row);
-
-    // Initialize writer
-    var row_writer = try PngRowWriter.init(allocator, writer, crop_width, crop_height, ctx.channels);
-    defer row_writer.deinit();
-
-    // Process each row
-    for (0..ctx.height) |y| {
-        const row_start = y * (src_stride + 1);
-        const filter_type = ctx.raw_data[row_start];
-        const filtered_row = ctx.raw_data[row_start + 1 .. row_start + 1 + src_stride];
-
-        // Apply filter to get actual pixel data
-        try applyFilter(filter_type, filtered_row, prev_row, current_row, ctx.channels);
-
-        // If this row is in the crop region, extract and write it
-        if (y >= crop_y and y < crop_y + crop_height) {
-            const x_offset = @as(usize, crop_x) * @as(usize, ctx.channels);
-            @memcpy(output_row, current_row[x_offset..][0..dst_stride]);
-            try row_writer.writeRow(output_row);
-        }
-
-        // Swap buffers
-        const tmp = prev_row;
-        prev_row = current_row;
-        current_row = tmp;
-    }
-
-    try row_writer.finish();
-}
-
-test "streamingCrop produces correct output" {
-    const allocator = std.testing.allocator;
-
-    // Create a test image
-    const image = @import("image.zig");
-    var img = try image.Image.init(allocator, 10, 10, 3);
-    defer img.deinit();
-
-    // Set a marker pixel
-    const red = [_]u8{ 255, 0, 0 };
-    img.setPixel(5, 5, &red);
-
-    // Encode to PNG
-    const png_data = try png.saveToMemory(allocator, &img);
-    defer allocator.free(png_data);
-
-    // Test using the non-streaming approach to verify the crop logic
-    var decoded = try png.loadFromMemory(allocator, png_data);
-    defer decoded.deinit();
-
-    var cropped = try decoded.crop(4, 4, 4, 4);
-    defer cropped.deinit();
-
-    // The red pixel at (5,5) should now be at (1,1) in cropped
-    try std.testing.expectEqualSlices(u8, &red, cropped.getPixel(1, 1));
-}
-
-/// Streaming resize with minimal memory - uses a 2-row sliding window
-/// Memory usage: O(width * channels * 4) - truly streaming
-/// Inspired by libvips' demand-driven, rolling scanline approach
-pub fn streamingResizeLowMem(
-    allocator: Allocator,
-    reader: *std.Io.Reader,
-    writer: *std.Io.Writer,
-    new_width: u32,
-    new_height: u32,
-) !void {
-    if (new_width == 0 or new_height == 0) {
-        return DecodeError.InvalidResizeDimensions;
-    }
-
-    var ctx = try PngDecodeContext.init(allocator, reader);
-    defer ctx.deinit();
-
-    const src_stride = @as(usize, ctx.width) * @as(usize, ctx.channels);
-    const dst_stride = @as(usize, new_width) * @as(usize, ctx.channels);
-    const channels = @as(usize, ctx.channels);
-
-    // Rolling window: only 2 decoded source rows + filter helper
-    var filter_prev = try allocator.alloc(u8, src_stride);
-    defer allocator.free(filter_prev);
-    @memset(filter_prev, 0);
-
-    var filter_curr = try allocator.alloc(u8, src_stride);
-    defer allocator.free(filter_curr);
-
-    // The 2-row cache for bilinear interpolation
-    var row_cache: [2][]u8 = undefined;
-    row_cache[0] = try allocator.alloc(u8, src_stride);
-    defer allocator.free(row_cache[0]);
-    row_cache[1] = try allocator.alloc(u8, src_stride);
-    defer allocator.free(row_cache[1]);
-
-    var cached_rows: [2]i64 = .{ -1, -1 }; // which source rows are in cache
-
-    const output_row = try allocator.alloc(u8, dst_stride);
-    defer allocator.free(output_row);
-
-    // Initialize writer
-    var row_writer = try PngRowWriter.init(allocator, writer, new_width, new_height, ctx.channels);
-    defer row_writer.deinit();
-
-    // Scaling ratios
-    const src_w = @as(f64, @floatFromInt(ctx.width));
-    const src_h = @as(f64, @floatFromInt(ctx.height));
-    const dst_w = @as(f64, @floatFromInt(new_width));
-    const dst_h = @as(f64, @floatFromInt(new_height));
-    const x_ratio = src_w / dst_w;
-    const y_ratio = src_h / dst_h;
-
-    // Track how far we've decoded (sequential decoding required for PNG filters)
-    var decoded_up_to: i64 = -1;
-
-    // Process each output row
-    for (0..new_height) |dst_y| {
-        const src_y_f = (@as(f64, @floatFromInt(dst_y)) + 0.5) * y_ratio - 0.5;
-        const y0_i = @as(i64, @intFromFloat(@floor(src_y_f)));
-        const y0: u32 = @intCast(@max(0, y0_i));
-        const y1: u32 = @min(y0 + 1, ctx.height - 1);
-        const y_weight = src_y_f - @floor(src_y_f);
-
-        // Ensure y0 and y1 are in the cache
-        // Decode rows sequentially up to what we need
-        while (decoded_up_to < @as(i64, y1)) {
-            decoded_up_to += 1;
-            const y: usize = @intCast(decoded_up_to);
-            const row_start = y * (src_stride + 1);
-            const filter_type = ctx.raw_data[row_start];
-            const filtered_row = ctx.raw_data[row_start + 1 .. row_start + 1 + src_stride];
-
-            try applyFilter(filter_type, filtered_row, filter_prev, filter_curr, ctx.channels);
-
-            // Store in cache (rotating buffer)
-            const cache_slot: usize = @intCast(@mod(decoded_up_to, 2));
-            @memcpy(row_cache[cache_slot], filter_curr);
-            cached_rows[cache_slot] = decoded_up_to;
-
-            // Swap filter buffers
-            const tmp = filter_prev;
-            filter_prev = filter_curr;
-            filter_curr = tmp;
-        }
-
-        // Get pointers to cached rows
-        const row0 = blk: {
-            if (cached_rows[0] == y0) break :blk row_cache[0];
-            if (cached_rows[1] == y0) break :blk row_cache[1];
-            unreachable;
-        };
-        const row1 = blk: {
-            if (cached_rows[0] == y1) break :blk row_cache[0];
-            if (cached_rows[1] == y1) break :blk row_cache[1];
-            unreachable;
-        };
-
-        bilinearInterpolateRow(output_row, row0, row1, y_weight, ctx.width, new_width, channels, x_ratio);
-
-        try row_writer.writeRow(output_row);
-    }
-
-    try row_writer.finish();
-}
-
-/// Ultra-low memory streaming resize using incremental decompression.
-/// Memory: O(compressed_size + width * 4) - only compressed data + 2 row cache
+/// Streaming resize - decompresses PNG incrementally while resizing.
 ///
-/// This is the most memory-efficient resize:
-/// - Compressed data: ~10-50% of decompressed size (kept in memory)
-/// - Decompresses row-by-row instead of all at once
-/// - 2-row sliding window for bilinear interpolation
+/// Memory usage: O(compressed_size + width) instead of O(width × height)
+/// - Keeps compressed PNG data in memory (~10-50% of decompressed size)
+/// - Decompresses row-by-row on demand
+/// - Uses 2-row sliding window for bilinear interpolation
 ///
-/// Trade-off: Cannot seek backward, so only works for sequential processing.
-pub fn streamingResizeUltraLowMem(
+/// Use this for large images on memory-constrained systems.
+/// For typical use cases, prefer Image.resize() (simpler, faster).
+///
+/// Trade-off: Cannot seek backward - only works for sequential processing.
+pub fn streamingResize(
     allocator: Allocator,
     reader: *std.Io.Reader,
     writer: *std.Io.Writer,
@@ -408,200 +224,6 @@ pub fn streamingResizeUltraLowMem(
     try row_writer.finish();
 }
 
-/// Streaming resize - reads PNG row by row, outputs resized PNG
-/// Memory usage: O(width * height * channels) - keeps all decoded rows
-/// Note: For lower memory usage, see streamingResizeLowMem or streamingResizeUltraLowMem
-pub fn streamingResize(
-    allocator: Allocator,
-    reader: *std.Io.Reader,
-    writer: *std.Io.Writer,
-    new_width: u32,
-    new_height: u32,
-) !void {
-    if (new_width == 0 or new_height == 0) {
-        return DecodeError.InvalidResizeDimensions;
-    }
-
-    // Use shared context for parsing
-    var ctx = try PngDecodeContext.init(allocator, reader);
-    defer ctx.deinit();
-
-    const src_stride = @as(usize, ctx.width) * @as(usize, ctx.channels);
-    const dst_stride = @as(usize, new_width) * @as(usize, ctx.channels);
-
-    // Allocate row buffers for bilinear interpolation (need 2 source rows)
-    var prev_row = try allocator.alloc(u8, src_stride);
-    defer allocator.free(prev_row);
-    @memset(prev_row, 0);
-
-    var current_row = try allocator.alloc(u8, src_stride);
-    defer allocator.free(current_row);
-
-    // Decode all rows into a temporary buffer for random access
-    // (True streaming resize would need smarter row caching)
-    const decoded_rows = try allocator.alloc([]u8, ctx.height);
-    defer {
-        for (decoded_rows) |row| allocator.free(row);
-        allocator.free(decoded_rows);
-    }
-
-    for (0..ctx.height) |y| {
-        const row_start = y * (src_stride + 1);
-        const filter_type = ctx.raw_data[row_start];
-        const filtered_row = ctx.raw_data[row_start + 1 .. row_start + 1 + src_stride];
-
-        try applyFilter(filter_type, filtered_row, prev_row, current_row, ctx.channels);
-
-        decoded_rows[y] = try allocator.alloc(u8, src_stride);
-        @memcpy(decoded_rows[y], current_row);
-
-        const tmp = prev_row;
-        prev_row = current_row;
-        current_row = tmp;
-    }
-
-    // Initialize writer
-    var row_writer = try PngRowWriter.init(allocator, writer, new_width, new_height, ctx.channels);
-    defer row_writer.deinit();
-
-    // Output row buffer
-    const output_row = try allocator.alloc(u8, dst_stride);
-    defer allocator.free(output_row);
-
-    // Resize using bilinear interpolation
-    const src_w = @as(f64, @floatFromInt(ctx.width));
-    const src_h = @as(f64, @floatFromInt(ctx.height));
-    const dst_w = @as(f64, @floatFromInt(new_width));
-    const dst_h = @as(f64, @floatFromInt(new_height));
-
-    const x_ratio = src_w / dst_w;
-    const y_ratio = src_h / dst_h;
-
-    const ch = @as(usize, ctx.channels);
-    for (0..new_height) |dst_y| {
-        const src_y_f = (@as(f64, @floatFromInt(dst_y)) + 0.5) * y_ratio - 0.5;
-        const y0 = @as(u32, @intFromFloat(@max(0, @floor(src_y_f))));
-        const y1 = @min(y0 + 1, ctx.height - 1);
-        const y_weight = src_y_f - @floor(src_y_f);
-
-        bilinearInterpolateRow(output_row, decoded_rows[y0], decoded_rows[y1], y_weight, ctx.width, new_width, ch, x_ratio);
-
-        try row_writer.writeRow(output_row);
-    }
-
-    try row_writer.finish();
-}
-
-/// Streaming thumbnail - center crop + resize in one pass
-pub fn streamingThumbnail(
-    allocator: Allocator,
-    reader: *std.Io.Reader,
-    writer: *std.Io.Writer,
-    size: u32,
-) !void {
-    if (size == 0) return DecodeError.InvalidResizeDimensions;
-
-    // Use shared context for parsing
-    var ctx = try PngDecodeContext.init(allocator, reader);
-    defer ctx.deinit();
-
-    // Calculate center crop
-    const min_dim = @min(ctx.width, ctx.height);
-    const crop_x = (ctx.width - min_dim) / 2;
-    const crop_y = (ctx.height - min_dim) / 2;
-
-    const src_stride = @as(usize, ctx.width) * @as(usize, ctx.channels);
-    const crop_stride = @as(usize, min_dim) * @as(usize, ctx.channels);
-
-    // Decode and crop rows
-    var prev_row = try allocator.alloc(u8, src_stride);
-    defer allocator.free(prev_row);
-    @memset(prev_row, 0);
-
-    var current_row = try allocator.alloc(u8, src_stride);
-    defer allocator.free(current_row);
-
-    // Store only cropped rows
-    const cropped_rows = try allocator.alloc([]u8, min_dim);
-    defer {
-        for (cropped_rows) |row| allocator.free(row);
-        allocator.free(cropped_rows);
-    }
-
-    var crop_row_idx: u32 = 0;
-    for (0..ctx.height) |y| {
-        const row_start = y * (src_stride + 1);
-        const filter_type = ctx.raw_data[row_start];
-        const filtered_row = ctx.raw_data[row_start + 1 .. row_start + 1 + src_stride];
-
-        try applyFilter(filter_type, filtered_row, prev_row, current_row, ctx.channels);
-
-        if (y >= crop_y and y < crop_y + min_dim) {
-            cropped_rows[crop_row_idx] = try allocator.alloc(u8, crop_stride);
-            const x_offset = @as(usize, crop_x) * @as(usize, ctx.channels);
-            @memcpy(cropped_rows[crop_row_idx], current_row[x_offset..][0..crop_stride]);
-            crop_row_idx += 1;
-        }
-
-        const tmp = prev_row;
-        prev_row = current_row;
-        current_row = tmp;
-    }
-
-    // Initialize writer
-    var row_writer = try PngRowWriter.init(allocator, writer, size, size, ctx.channels);
-    defer row_writer.deinit();
-
-    const dst_stride = @as(usize, size) * @as(usize, ctx.channels);
-    const output_row = try allocator.alloc(u8, dst_stride);
-    defer allocator.free(output_row);
-
-    // Resize from cropped square to target size
-    const src_size = @as(f64, @floatFromInt(min_dim));
-    const dst_size = @as(f64, @floatFromInt(size));
-    const ratio = src_size / dst_size;
-
-    const ch = @as(usize, ctx.channels);
-    for (0..size) |dst_y| {
-        const src_y_f = (@as(f64, @floatFromInt(dst_y)) + 0.5) * ratio - 0.5;
-        const y0 = @as(u32, @intFromFloat(@max(0, @floor(src_y_f))));
-        const y1 = @min(y0 + 1, min_dim - 1);
-        const y_weight = src_y_f - @floor(src_y_f);
-
-        bilinearInterpolateRow(output_row, cropped_rows[y0], cropped_rows[y1], y_weight, min_dim, size, ch, ratio);
-
-        try row_writer.writeRow(output_row);
-    }
-
-    try row_writer.finish();
-}
-
-test "streamingThumbnail produces square output" {
-    const allocator = std.testing.allocator;
-
-    const image = @import("image.zig");
-    var img = try image.Image.init(allocator, 20, 10, 3); // Wide image
-    defer img.deinit();
-
-    const png_data = try png.saveToMemory(allocator, &img);
-    defer allocator.free(png_data);
-
-    // Use in-memory output with Allocating writer
-    var out_writer: std.Io.Writer.Allocating = .init(allocator);
-
-    var input_reader: std.Io.Reader = .fixed(png_data);
-    try streamingThumbnail(allocator, &input_reader, &out_writer.writer, 5);
-
-    const output_data = try out_writer.toOwnedSlice();
-    defer allocator.free(output_data);
-
-    var result = try png.loadFromMemory(allocator, output_data);
-    defer result.deinit();
-
-    try std.testing.expectEqual(@as(u32, 5), result.width);
-    try std.testing.expectEqual(@as(u32, 5), result.height);
-}
-
 test "streamingResize produces correct dimensions" {
     const allocator = std.testing.allocator;
 
@@ -609,10 +231,13 @@ test "streamingResize produces correct dimensions" {
     var img = try image.Image.init(allocator, 10, 10, 3);
     defer img.deinit();
 
+    const red = [_]u8{ 255, 0, 0 };
+    img.setPixel(0, 0, &red);
+    img.setPixel(9, 9, &red);
+
     const png_data = try png.saveToMemory(allocator, &img);
     defer allocator.free(png_data);
 
-    // Use in-memory output with Allocating writer
     var out_writer: std.Io.Writer.Allocating = .init(allocator);
 
     var input_reader: std.Io.Reader = .fixed(png_data);
@@ -628,73 +253,7 @@ test "streamingResize produces correct dimensions" {
     try std.testing.expectEqual(@as(u32, 15), result.height);
 }
 
-test "streamingCrop end-to-end" {
-    const allocator = std.testing.allocator;
-
-    // Create a test image with a marker
-    const image = @import("image.zig");
-    var img = try image.Image.init(allocator, 10, 10, 3);
-    defer img.deinit();
-
-    const red = [_]u8{ 255, 0, 0 };
-    const green = [_]u8{ 0, 255, 0 };
-    img.setPixel(2, 2, &red);
-    img.setPixel(3, 3, &green);
-
-    // Encode to PNG
-    const png_data = try png.saveToMemory(allocator, &img);
-    defer allocator.free(png_data);
-
-    // Use in-memory output with Allocating writer
-    var out_writer: std.Io.Writer.Allocating = .init(allocator);
-
-    var input_reader: std.Io.Reader = .fixed(png_data);
-    try streamingCrop(allocator, &input_reader, &out_writer.writer, 2, 2, 4, 4);
-
-    // Load result and verify
-    const output_data = try out_writer.toOwnedSlice();
-    defer allocator.free(output_data);
-
-    var result = try png.loadFromMemory(allocator, output_data);
-    defer result.deinit();
-
-    try std.testing.expectEqual(@as(u32, 4), result.width);
-    try std.testing.expectEqual(@as(u32, 4), result.height);
-    try std.testing.expectEqualSlices(u8, &red, result.getPixel(0, 0));
-    try std.testing.expectEqualSlices(u8, &green, result.getPixel(1, 1));
-}
-
-test "streamingResizeLowMem produces correct dimensions" {
-    const allocator = std.testing.allocator;
-
-    const image = @import("image.zig");
-    var img = try image.Image.init(allocator, 10, 10, 3);
-    defer img.deinit();
-
-    // Set some pixels to verify interpolation doesn't break
-    const red = [_]u8{ 255, 0, 0 };
-    img.setPixel(0, 0, &red);
-    img.setPixel(9, 9, &red);
-
-    const png_data = try png.saveToMemory(allocator, &img);
-    defer allocator.free(png_data);
-
-    var out_writer: std.Io.Writer.Allocating = .init(allocator);
-
-    var input_reader: std.Io.Reader = .fixed(png_data);
-    try streamingResizeLowMem(allocator, &input_reader, &out_writer.writer, 20, 15);
-
-    const output_data = try out_writer.toOwnedSlice();
-    defer allocator.free(output_data);
-
-    var result = try png.loadFromMemory(allocator, output_data);
-    defer result.deinit();
-
-    try std.testing.expectEqual(@as(u32, 20), result.width);
-    try std.testing.expectEqual(@as(u32, 15), result.height);
-}
-
-test "streamingResizeLowMem matches streamingResize output" {
+test "streamingResize with gradient pattern" {
     const allocator = std.testing.allocator;
 
     const image = @import("image.zig");
@@ -716,100 +275,18 @@ test "streamingResizeLowMem matches streamingResize output" {
     const png_data = try png.saveToMemory(allocator, &img);
     defer allocator.free(png_data);
 
-    // Resize with both methods
-    var out1: std.Io.Writer.Allocating = .init(allocator);
-    var reader1: std.Io.Reader = .fixed(png_data);
-    try streamingResize(allocator, &reader1, &out1.writer, 12, 12);
-    const data1 = try out1.toOwnedSlice();
-    defer allocator.free(data1);
+    // Resize with streaming method
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    var reader: std.Io.Reader = .fixed(png_data);
+    try streamingResize(allocator, &reader, &out.writer, 12, 12);
+    const streaming_png = try out.toOwnedSlice();
+    defer allocator.free(streaming_png);
 
-    var out2: std.Io.Writer.Allocating = .init(allocator);
-    var reader2: std.Io.Reader = .fixed(png_data);
-    try streamingResizeLowMem(allocator, &reader2, &out2.writer, 12, 12);
-    const data2 = try out2.toOwnedSlice();
-    defer allocator.free(data2);
+    var resized_streaming = try png.loadFromMemory(allocator, streaming_png);
+    defer resized_streaming.deinit();
 
-    // Load both results
-    var result1 = try png.loadFromMemory(allocator, data1);
-    defer result1.deinit();
-    var result2 = try png.loadFromMemory(allocator, data2);
-    defer result2.deinit();
-
-    // Should produce identical output
-    try std.testing.expectEqualSlices(u8, result1.data, result2.data);
-}
-
-test "streamingResizeUltraLowMem produces correct dimensions" {
-    const allocator = std.testing.allocator;
-
-    const image = @import("image.zig");
-    var img = try image.Image.init(allocator, 10, 10, 3);
-    defer img.deinit();
-
-    const red = [_]u8{ 255, 0, 0 };
-    img.setPixel(0, 0, &red);
-    img.setPixel(9, 9, &red);
-
-    const png_data = try png.saveToMemory(allocator, &img);
-    defer allocator.free(png_data);
-
-    var out_writer: std.Io.Writer.Allocating = .init(allocator);
-
-    var input_reader: std.Io.Reader = .fixed(png_data);
-    try streamingResizeUltraLowMem(allocator, &input_reader, &out_writer.writer, 20, 15);
-
-    const output_data = try out_writer.toOwnedSlice();
-    defer allocator.free(output_data);
-
-    var result = try png.loadFromMemory(allocator, output_data);
-    defer result.deinit();
-
-    try std.testing.expectEqual(@as(u32, 20), result.width);
-    try std.testing.expectEqual(@as(u32, 15), result.height);
-}
-
-test "streamingResizeUltraLowMem matches other resize methods" {
-    const allocator = std.testing.allocator;
-
-    const image = @import("image.zig");
-    var img = try image.Image.init(allocator, 8, 8, 3);
-    defer img.deinit();
-
-    // Create a gradient pattern
-    for (0..8) |y| {
-        for (0..8) |x| {
-            const pixel = [_]u8{
-                @intCast(x * 32),
-                @intCast(y * 32),
-                @intCast((x + y) * 16),
-            };
-            img.setPixel(@intCast(x), @intCast(y), &pixel);
-        }
-    }
-
-    const png_data = try png.saveToMemory(allocator, &img);
-    defer allocator.free(png_data);
-
-    // Resize with LowMem method
-    var out1: std.Io.Writer.Allocating = .init(allocator);
-    var reader1: std.Io.Reader = .fixed(png_data);
-    try streamingResizeLowMem(allocator, &reader1, &out1.writer, 12, 12);
-    const data1 = try out1.toOwnedSlice();
-    defer allocator.free(data1);
-
-    // Resize with UltraLowMem method
-    var out2: std.Io.Writer.Allocating = .init(allocator);
-    var reader2: std.Io.Reader = .fixed(png_data);
-    try streamingResizeUltraLowMem(allocator, &reader2, &out2.writer, 12, 12);
-    const data2 = try out2.toOwnedSlice();
-    defer allocator.free(data2);
-
-    // Load both results
-    var result1 = try png.loadFromMemory(allocator, data1);
-    defer result1.deinit();
-    var result2 = try png.loadFromMemory(allocator, data2);
-    defer result2.deinit();
-
-    // Should produce identical output
-    try std.testing.expectEqualSlices(u8, result1.data, result2.data);
+    // Verify dimensions
+    try std.testing.expectEqual(@as(u32, 12), resized_streaming.width);
+    try std.testing.expectEqual(@as(u32, 12), resized_streaming.height);
+    try std.testing.expectEqual(@as(u8, 3), resized_streaming.channels);
 }

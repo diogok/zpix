@@ -431,25 +431,28 @@ test {
 Extract shared logic into helper functions or types:
 
 ```zig
-// Bad: Duplicate PNG parsing in multiple functions
-pub fn streamingCrop(...) { /* parse PNG header */ }
-pub fn streamingResize(...) { /* parse PNG header again */ }
+// Bad: Duplicate decoding logic in multiple functions
+pub fn processImageA(...) { /* decode PNG header */ }
+pub fn processImageB(...) { /* decode PNG header again */ }
 
-// Good: Shared context
-const PngContext = struct {
+// Good: Shared decoder
+const PngStreamingDecoder = struct {
     width: u32,
     height: u32,
     channels: u8,
     raw_data: []u8,
 
-    pub fn init(allocator: Allocator, reader: *std.Io.Reader) !PngContext { ... }
-    pub fn deinit(self: *PngContext, allocator: Allocator) void { ... }
+    pub fn init(allocator: Allocator, reader: *std.Io.Reader) !PngStreamingDecoder { ... }
+    pub fn deinit(self: *PngStreamingDecoder) void { ... }
+    pub fn readRow(self: *PngStreamingDecoder) !?[]const u8 { ... }
 };
 
-pub fn streamingCrop(allocator: Allocator, reader: *std.Io.Reader, ...) !void {
-    var ctx = try PngContext.init(allocator, reader);
-    defer ctx.deinit(allocator);
-    // Use ctx...
+pub fn processImageA(allocator: Allocator, reader: *std.Io.Reader, ...) !void {
+    var decoder = try PngStreamingDecoder.init(allocator, reader);
+    defer decoder.deinit();
+    while (try decoder.readRow()) |row| {
+        // Process row...
+    }
 }
 ```
 

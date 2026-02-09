@@ -8,7 +8,7 @@ A pure Zig image library for generating thumbnails and tiles. Decodes JPEG and P
 - **Encode**: PNG
 - Crop, resize (bilinear), thumbnail generation
 - Rotate (90/180/270) and flip (horizontal/vertical)
-- Low-memory streaming APIs for large images
+- Low-memory streaming API for large images
 - CLI tool for image processing
 
 ## Format Support
@@ -95,7 +95,7 @@ test "PNG decoder produces same output as stb_image for RGB" {
 - Pixel-perfect output matching stb_image for all formats
 - Edge cases (interlacing, different color types, subsampling)
 - Image operations (crop, resize, rotate, flip)
-- Streaming operations with minimal memory
+- Streaming resize with minimal memory
 - Round-trip encoding/decoding
 
 **Adding new test fixtures:**
@@ -172,41 +172,36 @@ try stbz.encodePng(allocator, &image, &file_writer.interface);
 try file_writer.interface.flush();
 ```
 
-### Streaming Operations
+### Low-Memory Streaming
 
-Process images through Reader/Writer (loads full image):
-
-```zig
-// Crop: read PNG -> crop -> write PNG
-try stbz.cropStream(allocator, &reader, &writer, x, y, width, height);
-
-// Resize: read PNG -> resize -> write PNG
-try stbz.resizeStream(allocator, &reader, &writer, new_width, new_height);
-
-// Thumbnail: read PNG -> center crop -> resize -> write PNG
-try stbz.thumbnailStream(allocator, &reader, &writer, size);
-```
-
-### Low-Memory Streaming (Row-by-Row)
-
-For large images, use row-by-row processing with O(width) memory instead of O(width × height):
+For large images on memory-constrained systems, use incremental processing.
+**Note:** For typical use cases, prefer the simpler `Image` API (crop, resize, etc).
 
 ```zig
-// Crop with minimal memory (only row buffers allocated)
-try stbz.streamingCrop(allocator, &reader, &writer, x, y, width, height);
-
-// Resize with minimal memory
+// Streaming resize: decompresses PNG row-by-row while resizing
+// Memory: O(compressed_size + width) instead of O(width × height)
 try stbz.streamingResize(allocator, &reader, &writer, new_width, new_height);
 
-// Thumbnail with minimal memory
-try stbz.streamingThumbnail(allocator, &reader, &writer, size);
+// For custom streaming operations, use the row-based decoder:
+var decoder = try stbz.PngStreamingDecoder.init(allocator, &reader, .{});
+defer decoder.deinit();
+
+while (try decoder.readRow()) |row_data| {
+    // Process one row at a time
+    // row_data: []const u8 (width × channels bytes)
+}
 ```
 
-**Memory comparison (10000×10000 RGB image):**
-| API | Memory Usage |
-|-----|--------------|
-| `loadPngFile` + `crop` | ~300 MB |
-| `streamingCrop` | ~120 KB |
+**Memory comparison (4000×3000 RGB image):**
+| Operation | Standard API | Streaming API |
+|-----------|--------------|---------------|
+| Resize | ~36 MB (full decoded image) | ~3.6 MB (compressed + 2 rows) |
+
+**Trade-offs:**
+- ✓ Dramatically lower memory usage
+- ✓ Works on memory-constrained systems
+- ✗ Cannot seek backward (sequential only)
+- ✗ More complex API
 
 ## Benchmarks
 

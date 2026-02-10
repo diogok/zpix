@@ -128,7 +128,7 @@ pub fn build(b: *std.Build) void {
     test_all_step.dependOn(&run_compare_tests.step);
     test_all_step.dependOn(&run_jpeg_tests.step);
 
-    // Large image test executable
+    // Large image test executable (for manual testing)
     const large_test = b.addExecutable(.{
         .name = "test-large",
         .root_module = b.createModule(.{
@@ -141,40 +141,6 @@ pub fn build(b: *std.Build) void {
     const run_large_test = b.addRunArtifact(large_test);
     const large_step = b.step("test-large", "Run large image streaming test");
     large_step.dependOn(&run_large_test.step);
-
-    // Test progressive JPEG executable
-    const test_progressive = b.addExecutable(.{
-        .name = "test-progressive",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("bin/test_progressive.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    test_progressive.root_module.addImport("stbz", stbz_mod);
-    const run_test_progressive = b.addRunArtifact(test_progressive);
-    const test_progressive_step = b.step("test-progressive", "Test progressive JPEG loading");
-    test_progressive_step.dependOn(&run_test_progressive.step);
-
-    // Compare progressive JPEG with stb_image
-    const compare_progressive = b.addExecutable(.{
-        .name = "compare-progressive",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("bin/compare_progressive.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    compare_progressive.root_module.addImport("stbz", stbz_mod);
-    compare_progressive.root_module.addIncludePath(b.path("reference"));
-    compare_progressive.root_module.addCSourceFile(.{
-        .file = b.path("reference/ref_impl.c"),
-        .flags = &.{"-std=c99"},
-    });
-    compare_progressive.root_module.link_libc = true;
-    const run_compare_progressive = b.addRunArtifact(compare_progressive);
-    const compare_progressive_step = b.step("compare-progressive", "Compare progressive JPEG with stb_image");
-    compare_progressive_step.dependOn(&run_compare_progressive.step);
 
     // Benchmark executable (always ReleaseFast)
     const bench = b.addExecutable(.{

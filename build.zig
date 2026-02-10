@@ -49,6 +49,30 @@ pub fn build(b: *std.Build) void {
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
 
+    // JPEG unit tests (behavior, edge cases, no C dependency)
+    const jpeg_unit_tests = b.addTest(.{
+        .name = "jpeg-unit-tests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/test_jpeg_unit.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    jpeg_unit_tests.root_module.addImport("stbz", stbz_mod);
+    const run_jpeg_unit_tests = b.addRunArtifact(jpeg_unit_tests);
+
+    // Error handling tests (corrupt/invalid files)
+    const error_tests = b.addTest(.{
+        .name = "error-handling-tests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/test_error_handling.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    error_tests.root_module.addImport("stbz", stbz_mod);
+    const run_error_tests = b.addRunArtifact(error_tests);
+
     // Comparison tests (Zig vs C reference)
     const compare_tests = b.addTest(.{
         .name = "compare-tests",
@@ -87,10 +111,22 @@ pub fn build(b: *std.Build) void {
 
     const run_jpeg_tests = b.addRunArtifact(jpeg_tests);
 
-    const test_step = b.step("test", "Run all tests");
+    // Separate test steps for better organization
+    const test_step = b.step("test", "Run unit tests (fast, no C dependencies)");
     test_step.dependOn(&run_unit_tests.step);
-    test_step.dependOn(&run_compare_tests.step);
-    test_step.dependOn(&run_jpeg_tests.step);
+    test_step.dependOn(&run_jpeg_unit_tests.step);
+    test_step.dependOn(&run_error_tests.step);
+
+    const integration_test_step = b.step("integration-test", "Run integration tests (compare against stb_image)");
+    integration_test_step.dependOn(&run_compare_tests.step);
+    integration_test_step.dependOn(&run_jpeg_tests.step);
+
+    const test_all_step = b.step("test-all", "Run all tests (unit + integration)");
+    test_all_step.dependOn(&run_unit_tests.step);
+    test_all_step.dependOn(&run_jpeg_unit_tests.step);
+    test_all_step.dependOn(&run_error_tests.step);
+    test_all_step.dependOn(&run_compare_tests.step);
+    test_all_step.dependOn(&run_jpeg_tests.step);
 
     // Large image test executable
     const large_test = b.addExecutable(.{

@@ -1,7 +1,21 @@
-## Testing
-- are the tests relevant
-- do the integration test test behavior
-- can I run it with zig build integration-test (or similar name)
+## Testing (✓ Completed)
+
+### Test Organization
+- **Unit tests** (`zig build test`): 59 tests, fast (70ms), no C dependencies
+  - Image operations (18 tests)
+  - PNG encoding/streaming (10 tests)
+  - JPEG behavioral tests (12 tests)
+  - Error handling (19 tests)
+- **Integration tests** (`zig build integration-test`): 11 tests, with stb_image comparison
+  - PNG comparison (7 tests)
+  - JPEG comparison (4 tests)
+- **All tests** (`zig build test-all`): 70 total tests
+
+### Test Coverage
+✓ Output correctness (pixel-perfect comparison vs stb_image)
+✓ Behavioral tests (dimensions, channels, memory allocation)
+✓ Error handling (invalid signatures, truncated files, corrupt data)
+✓ Edge cases (empty files, zero dimensions, unsupported formats)
 
 ## Progressive JPEG Support (✓ Fully Implemented)
 

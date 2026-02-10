@@ -2,9 +2,18 @@
 
 A pure Zig image library for generating thumbnails and tiles. Decodes JPEG and PNG, encodes PNG. No C dependencies in the core library.
 
+## Documentation
+
+- **[Usage Guide](docs/USAGE.md)** - API usage and quick start
+- **[Architecture](docs/ARCHITECTURE.md)** - Project structure and design
+- **[Error Handling](docs/ERROR_HANDLING.md)** - Error handling patterns
+- **[Examples](docs/EXAMPLES.md)** - Practical code examples
+- **[API Reference](docs/API.md)** - Complete API documentation
+- Generate API docs: `zig build docs` (outputs to `zig-out/docs/api`)
+
 ## Features
 
-- **Decode**: JPEG (baseline) and PNG
+- **Decode**: JPEG (baseline + progressive) and PNG
 - **Encode**: PNG
 - Crop, resize (bilinear), thumbnail generation
 - Rotate (90/180/270) and flip (horizontal/vertical)

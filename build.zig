@@ -187,4 +187,21 @@ pub fn build(b: *std.Build) void {
     });
     const check_step = b.step("check", "Check for compile errors");
     check_step.dependOn(&check.step);
+
+    // Docs step (generate API documentation)
+    const docs = b.addTest(.{
+        .name = "docs",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/stbz.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const install_docs = b.addInstallDirectory(.{
+        .source_dir = docs.getEmittedDocs(),
+        .install_dir = .prefix,
+        .install_subdir = "docs/api",
+    });
+    const docs_step = b.step("docs", "Generate API documentation");
+    docs_step.dependOn(&install_docs.step);
 }

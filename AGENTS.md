@@ -1,5 +1,7 @@
 # stbz Development Instructions
 
+This file contains development instructions for AI agents, automated tools, and developers working on stbz. For project-specific Claude Code instructions, see [CLAUDE.md](CLAUDE.md).
+
 ## Build Commands
 
 - `zig build` - Build the library
@@ -7,7 +9,6 @@
 - `zig build integration-test` - Run integration tests (vs stb_image)
 - `zig build test-all` - Run all tests (unit + integration)
 - `zig build bench` - Run performance benchmarks
-- `zig build docs` - Generate API documentation (outputs to zig-out/docs/api)
 - `zig build -Doptimize=ReleaseFast` - Build optimized
 
 ## Development Approach

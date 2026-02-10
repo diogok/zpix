@@ -65,11 +65,11 @@ test "JPEG: unsupported precision (12-bit)" {
         0xFF, 0xD8, // SOI
         0xFF, 0xC0, // SOF0 (baseline)
         0x00, 0x0B, // Length = 11
-        0x0C,       // Precision = 12 bits (unsupported)
+        0x0C, // Precision = 12 bits (unsupported)
         0x00, 0x08, // Height = 8
         0x00, 0x08, // Width = 8
-        0x01,       // Components = 1
-        0x00,       // Component details...
+        0x01, // Components = 1
+        0x00, // Component details...
     };
 
     const result = stbz.loadJpegMemory(allocator, &twelve_bit);
@@ -82,10 +82,10 @@ test "JPEG: invalid component count (0)" {
         0xFF, 0xD8, // SOI
         0xFF, 0xC0, // SOF0
         0x00, 0x0B, // Length = 11
-        0x08,       // Precision = 8
+        0x08, // Precision = 8
         0x00, 0x08, // Height = 8
         0x00, 0x08, // Width = 8
-        0x00,       // Components = 0 (invalid!)
+        0x00, // Components = 0 (invalid!)
     };
 
     const result = stbz.loadJpegMemory(allocator, &zero_components);
@@ -98,10 +98,10 @@ test "JPEG: invalid component count (4 - CMYK not supported)" {
         0xFF, 0xD8, // SOI
         0xFF, 0xC0, // SOF0
         0x00, 0x11, // Length = 17
-        0x08,       // Precision = 8
+        0x08, // Precision = 8
         0x00, 0x08, // Height = 8
         0x00, 0x08, // Width = 8
-        0x04,       // Components = 4 (CMYK - not supported)
+        0x04, // Components = 4 (CMYK - not supported)
         // Would need component details here...
     };
 
@@ -144,7 +144,7 @@ test "PNG: missing IHDR chunk" {
         0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
         // But no IHDR chunk, just IEND
         0x00, 0x00, 0x00, 0x00, // Length = 0
-        'I',  'E',  'N',  'D',  // Type = IEND
+        'I', 'E', 'N', 'D', // Type = IEND
         0xAE, 0x42, 0x60, 0x82, // CRC
     };
 
@@ -160,7 +160,7 @@ test "PNG: truncated IHDR" {
         0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
         // IHDR with incorrect length
         0x00, 0x00, 0x00, 0x0D, // Length = 13 (correct)
-        'I',  'H',  'D',  'R',  // Type = IHDR
+        'I', 'H', 'D', 'R', // Type = IHDR
         // But not enough data (should be 13 bytes)
         0x00, 0x00, 0x00, 0x04, // Width = 4
         // Missing height and other fields
@@ -177,14 +177,14 @@ test "PNG: zero width" {
         0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
         // IHDR
         0x00, 0x00, 0x00, 0x0D, // Length = 13
-        'I',  'H',  'D',  'R',  // Type = IHDR
+        'I', 'H', 'D', 'R', // Type = IHDR
         0x00, 0x00, 0x00, 0x00, // Width = 0 (invalid!)
         0x00, 0x00, 0x00, 0x04, // Height = 4
-        0x08,                   // Bit depth = 8
-        0x02,                   // Color type = RGB
-        0x00,                   // Compression = deflate
-        0x00,                   // Filter = adaptive
-        0x00,                   // Interlace = none
+        0x08, // Bit depth = 8
+        0x02, // Color type = RGB
+        0x00, // Compression = deflate
+        0x00, // Filter = adaptive
+        0x00, // Interlace = none
         0x00, 0x00, 0x00, 0x00, // CRC (incorrect but doesn't matter for this test)
     };
 
@@ -200,14 +200,14 @@ test "PNG: zero height" {
         0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
         // IHDR
         0x00, 0x00, 0x00, 0x0D, // Length = 13
-        'I',  'H',  'D',  'R',  // Type = IHDR
+        'I', 'H', 'D', 'R', // Type = IHDR
         0x00, 0x00, 0x00, 0x04, // Width = 4
         0x00, 0x00, 0x00, 0x00, // Height = 0 (invalid!)
-        0x08,                   // Bit depth = 8
-        0x02,                   // Color type = RGB
-        0x00,                   // Compression = deflate
-        0x00,                   // Filter = adaptive
-        0x00,                   // Interlace = none
+        0x08, // Bit depth = 8
+        0x02, // Color type = RGB
+        0x00, // Compression = deflate
+        0x00, // Filter = adaptive
+        0x00, // Interlace = none
         0x00, 0x00, 0x00, 0x00, // CRC
     };
 

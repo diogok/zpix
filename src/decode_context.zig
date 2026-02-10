@@ -140,7 +140,6 @@ pub const PngDecodeContext = struct {
     pub fn stride(self: Self) usize {
         return @as(usize, self.width) * @as(usize, self.channels);
     }
-
 };
 
 fn decompressZlib(allocator: Allocator, data: []const u8, expected_size: usize) (DecodeError || Allocator.Error)![]u8 {

@@ -41,4 +41,3 @@ pub const PngRowWriter = streaming.PngRowWriter;
 test {
     std.testing.refAllDecls(@This());
 }
-

@@ -262,4 +262,3 @@ fn runFlip(allocator: std.mem.Allocator, args: []const []const u8) void {
     const dir_name: []const u8 = if (horizontal) "horizontally" else "vertically";
     printFmt("Flipped {s} -> {s} ({s})\n", .{ input_path, output_path, dir_name });
 }
-

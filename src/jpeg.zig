@@ -135,6 +135,8 @@ const BitReader = struct {
     pos: usize,
     bit_buf: u32,
     bits_left: u6, // 0..32
+    marker: u8, // non-zero if a marker was encountered during reading
+    nomore: bool, // true once a marker is hit; stops feeding data
 
     fn init(data: []const u8) BitReader {
         return .{
@@ -142,17 +144,29 @@ const BitReader = struct {
             .pos = 0,
             .bit_buf = 0,
             .bits_left = 0,
+            .marker = 0,
+            .nomore = false,
         };
     }
 
     fn getNextByte(self: *BitReader) u8 {
+        if (self.nomore) return 0;
         if (self.pos >= self.data.len) return 0;
         const byte = self.data[self.pos];
         self.pos += 1;
         if (byte == 0xFF) {
-            // Skip stuffed zero byte
-            if (self.pos < self.data.len and self.data[self.pos] == 0x00) {
-                self.pos += 1;
+            if (self.pos < self.data.len) {
+                const next = self.data[self.pos];
+                if (next == 0x00) {
+                    // Byte-stuffed zero — skip it
+                    self.pos += 1;
+                } else {
+                    // Real marker found — save it and stop feeding data
+                    self.marker = next;
+                    self.nomore = true;
+                    self.pos += 1;
+                    return 0;
+                }
             }
         }
         return byte;
@@ -721,13 +735,23 @@ fn decodeScanData(
 }
 
 fn skipRestartMarker(bits: *BitReader) void {
-    // Look for 0xFF followed by 0xDn (restart marker)
+    if (bits.marker != 0) {
+        // Marker was already found by getNextByte during bit reading
+        if (bits.marker >= 0xD0 and bits.marker <= 0xD7) {
+            bits.marker = 0;
+            bits.nomore = false;
+            return;
+        }
+    }
+    // Fallback: scan for restart marker in raw data (shouldn't normally be needed)
     while (bits.pos < bits.data.len) {
         if (bits.data[bits.pos] == 0xFF) {
             if (bits.pos + 1 < bits.data.len) {
                 const next = bits.data[bits.pos + 1];
                 if (next >= 0xD0 and next <= 0xD7) {
                     bits.pos += 2;
+                    bits.marker = 0;
+                    bits.nomore = false;
                     return;
                 }
             }

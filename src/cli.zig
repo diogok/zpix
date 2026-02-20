@@ -57,14 +57,14 @@ fn parseIntOrExit(value: []const u8, field_name: []const u8) u32 {
 }
 
 fn loadImageOrExit(allocator: std.mem.Allocator, path: []const u8) stbz.Image {
-    return stbz.loadPngFile(allocator, path) catch |err| {
+    return stbz.loadFile(allocator, path) catch |err| {
         printErrFmt("Error loading {s}: {}\n", .{ path, err });
         std.process.exit(1);
     };
 }
 
 fn saveImageOrExit(path: []const u8, img: *const stbz.Image) void {
-    stbz.savePngFile(img, path) catch |err| {
+    stbz.saveFile(img, path) catch |err| {
         printErrFmt("Error saving {s}: {}\n", .{ path, err });
         std.process.exit(1);
     };

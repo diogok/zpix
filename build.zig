@@ -148,6 +148,20 @@ pub fn build(b: *std.Build) void {
     test_all_step.dependOn(&run_jpeg_tests.step);
     test_all_step.dependOn(&run_jpeg_encode_tests.step);
 
+    // Bulk load test executable (loads all images from ~/RPG/Eberron/Images/)
+    const bulk_test = b.addExecutable(.{
+        .name = "test-bulk",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/test_bulk_load.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    bulk_test.root_module.addImport("stbz", stbz_mod);
+    const run_bulk_test = b.addRunArtifact(bulk_test);
+    const bulk_step = b.step("test-bulk", "Run bulk image load test against ~/RPG/Eberron/Images/");
+    bulk_step.dependOn(&run_bulk_test.step);
+
     // Large image test executable (for manual testing)
     const large_test = b.addExecutable(.{
         .name = "test-large",

@@ -3,16 +3,14 @@ const Allocator = std.mem.Allocator;
 const Image = @import("image.zig");
 const decode_context = @import("decode_context.zig");
 
-// Re-export shared types
-pub const DecodeError = decode_context.DecodeError;
-pub const PngDecodeContext = decode_context.PngDecodeContext;
-pub const PNG_SIGNATURE = decode_context.PNG_SIGNATURE;
-pub const ChunkType = decode_context.ChunkType;
-pub const Adam7 = decode_context.Adam7;
-pub const applyFilter = decode_context.applyFilter;
+const DecodeError = decode_context.DecodeError;
+const PngDecodeContext = decode_context.PngDecodeContext;
+const PNG_SIGNATURE = decode_context.PNG_SIGNATURE;
+const ChunkType = decode_context.ChunkType;
+const Adam7 = decode_context.Adam7;
+const applyFilter = decode_context.applyFilter;
 
-/// Core decoder: reads PNG from any std.Io.Reader
-pub fn decode(allocator: Allocator, reader: *std.Io.Reader) !Image {
+fn decode(allocator: Allocator, reader: *std.Io.Reader) !Image {
     var ctx = try PngDecodeContext.init(allocator, reader);
     defer ctx.deinit();
 
@@ -24,7 +22,7 @@ pub fn decode(allocator: Allocator, reader: *std.Io.Reader) !Image {
     }
 }
 
-/// Load PNG from file path (convenience wrapper)
+/// Load PNG from file path
 pub fn loadFromFile(allocator: Allocator, path: []const u8) !Image {
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
@@ -36,7 +34,7 @@ pub fn loadFromFile(allocator: Allocator, path: []const u8) !Image {
     return decode(allocator, &file_reader.interface);
 }
 
-/// Load PNG from memory buffer (convenience wrapper)
+/// Load PNG from memory buffer
 pub fn loadFromMemory(allocator: Allocator, data: []const u8) !Image {
     var reader: std.Io.Reader = .fixed(data);
     return decode(allocator, &reader);
@@ -131,8 +129,7 @@ fn reconstructInterlacedImage(allocator: Allocator, raw_data: []const u8, width:
 // PNG Encoder
 // ============================================================================
 
-/// Core encoder: writes PNG to any std.Io.Writer
-pub fn encode(allocator: Allocator, img: *const Image, writer: *std.Io.Writer) !void {
+fn encode(allocator: Allocator, img: *const Image, writer: *std.Io.Writer) !void {
     // Write PNG signature
     try writer.writeAll(&PNG_SIGNATURE);
 
@@ -146,7 +143,7 @@ pub fn encode(allocator: Allocator, img: *const Image, writer: *std.Io.Writer) !
     try writeIendChunk(writer);
 }
 
-/// Save PNG to file path (convenience wrapper)
+/// Save PNG to file path
 pub fn saveToFile(img: *const Image, path: []const u8) !void {
     const file = try std.fs.cwd().createFile(path, .{});
     defer file.close();
@@ -158,14 +155,14 @@ pub fn saveToFile(img: *const Image, path: []const u8) !void {
     try file_writer.interface.flush();
 }
 
-/// Save PNG to memory buffer (convenience wrapper)
+/// Save PNG to memory buffer
 pub fn saveToMemory(allocator: Allocator, img: *const Image) ![]u8 {
     var out_writer: std.Io.Writer.Allocating = .init(allocator);
     try encode(allocator, img, &out_writer.writer);
     return out_writer.toOwnedSlice();
 }
 
-pub fn writeChunk(writer: *std.Io.Writer, chunk_type: [4]u8, data: []const u8) !void {
+fn writeChunk(writer: *std.Io.Writer, chunk_type: [4]u8, data: []const u8) !void {
     // Length (4 bytes, big endian)
     var len_buf: [4]u8 = undefined;
     std.mem.writeInt(u32, &len_buf, @intCast(data.len), .big);
@@ -186,7 +183,7 @@ pub fn writeChunk(writer: *std.Io.Writer, chunk_type: [4]u8, data: []const u8) !
     try writer.writeAll(&crc_buf);
 }
 
-pub fn buildIhdrData(width: u32, height: u32, channels: u8) [13]u8 {
+fn buildIhdrData(width: u32, height: u32, channels: u8) [13]u8 {
     var ihdr_data: [13]u8 = undefined;
     std.mem.writeInt(u32, ihdr_data[0..4], width, .big);
     std.mem.writeInt(u32, ihdr_data[4..8], height, .big);

@@ -233,35 +233,20 @@ const BitReader = struct {
     }
 };
 
-/// Core decoder: reads JPEG from any std.Io.Reader
-pub fn decode(allocator: Allocator, reader: *std.Io.Reader) !Image {
-    // Read entire input into memory for bitstream processing
-    var buffer: std.ArrayList(u8) = .empty;
-    defer buffer.deinit(allocator);
-
-    var read_buf: [8192]u8 = undefined;
-    while (true) {
-        const n = reader.readSliceShort(&read_buf) catch break;
-        if (n == 0) break;
-        try buffer.appendSlice(allocator, read_buf[0..n]);
-    }
-
-    return decodeMemory(allocator, buffer.items);
-}
-
-/// Load JPEG from file path (convenience wrapper)
+/// Load JPEG from file path
 pub fn loadFromFile(allocator: Allocator, path: []const u8) !Image {
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
-    const buf = try allocator.alloc(u8, 65536);
-    defer allocator.free(buf);
-    var file_reader = file.reader(buf);
+    const stat = try file.stat();
+    const data = try allocator.alloc(u8, stat.size);
+    defer allocator.free(data);
 
-    return decode(allocator, &file_reader.interface);
+    _ = try file.readAll(data);
+    return decodeMemory(allocator, data);
 }
 
-/// Load JPEG from memory buffer (convenience wrapper)
+/// Load JPEG from memory buffer
 pub fn loadFromMemory(allocator: Allocator, data: []const u8) !Image {
     return decodeMemory(allocator, data);
 }

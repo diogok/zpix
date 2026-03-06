@@ -454,8 +454,7 @@ fn writeSOS(writer: *std.Io.Writer, num_components: u8) !void {
     try writer.writeAll(&[_]u8{ 0, 63, 0 }); // Ss=0, Se=63, Ah=0|Al=0
 }
 
-/// Core encoder: writes JPEG to any std.Io.Writer
-pub fn encode(_: Allocator, img: *const Image, writer: *std.Io.Writer, quality: u8) !void {
+fn encode(_: Allocator, img: *const Image, writer: *std.Io.Writer, quality: u8) !void {
 
     const clamped_quality = if (quality == 0) @as(u8, 1) else quality;
 
@@ -545,7 +544,7 @@ pub fn encode(_: Allocator, img: *const Image, writer: *std.Io.Writer, quality: 
     try writeMarker(writer, 0xFFD9); // EOI
 }
 
-/// Save JPEG to file path (convenience wrapper)
+/// Save JPEG to file path
 pub fn saveToFile(img: *const Image, path: []const u8, quality: u8) !void {
     const file = try std.fs.cwd().createFile(path, .{});
     defer file.close();
@@ -557,7 +556,7 @@ pub fn saveToFile(img: *const Image, path: []const u8, quality: u8) !void {
     try file_writer.interface.flush();
 }
 
-/// Save JPEG to memory buffer (convenience wrapper)
+/// Save JPEG to memory buffer
 pub fn saveToMemory(allocator: Allocator, img: *const Image, quality: u8) ![]u8 {
     var out_writer: std.Io.Writer.Allocating = .init(allocator);
     try encode(allocator, img, &out_writer.writer, quality);

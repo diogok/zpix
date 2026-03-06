@@ -162,20 +162,6 @@ pub fn build(b: *std.Build) void {
     const bulk_step = b.step("test-bulk", "Run bulk image load test against ~/RPG/Eberron/Images/");
     bulk_step.dependOn(&run_bulk_test.step);
 
-    // Large image test executable (for manual testing)
-    const large_test = b.addExecutable(.{
-        .name = "test-large",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("test/test_large_image.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    large_test.root_module.addImport("zpix", zpix_mod);
-    const run_large_test = b.addRunArtifact(large_test);
-    const large_step = b.step("test-large", "Run large image streaming test");
-    large_step.dependOn(&run_large_test.step);
-
     // Benchmark executable (always ReleaseFast)
     const bench = b.addExecutable(.{
         .name = "bench",

@@ -6,21 +6,16 @@ pub const Image = @import("image.zig");
 pub const png = @import("png.zig");
 pub const jpeg = @import("jpeg.zig");
 pub const jpeg_encoder = @import("jpeg_encoder.zig");
-pub const streaming = @import("streaming.zig");
 
-// Core Reader/Writer based functions
-pub const decodePng = png.decode;
-pub const encodePng = png.encode;
-pub const decodeJpeg = jpeg.decode;
-
-// Convenience file-based functions
+// PNG
 pub const loadPngFile = png.loadFromFile;
 pub const loadPngMemory = png.loadFromMemory;
 pub const savePngFile = png.saveToFile;
 pub const savePngMemory = png.saveToMemory;
+
+// JPEG
 pub const loadJpegFile = jpeg.loadFromFile;
 pub const loadJpegMemory = jpeg.loadFromMemory;
-pub const encodeJpeg = jpeg_encoder.encode;
 pub const saveJpegFile = jpeg_encoder.saveToFile;
 pub const saveJpegMemory = jpeg_encoder.saveToMemory;
 
@@ -81,24 +76,6 @@ pub fn saveFile(img: *const Image, path: []const u8) !void {
         return FormatError.UnsupportedFormat;
     }
 }
-
-// ============================================================================
-// Low-Memory Streaming Operations
-// ============================================================================
-//
-// Use these for large images on memory-constrained systems.
-// For typical use cases, prefer the simpler Image API.
-
-/// Streaming resize with incremental decompression.
-/// Memory: O(compressed_size + width) instead of O(width × height)
-/// See streaming.zig for details and trade-offs.
-pub const streamingResize = streaming.streamingResize;
-
-/// Streaming PNG decoder - decompresses row-by-row on demand
-pub const PngStreamingDecoder = streaming.PngStreamingDecoder;
-
-/// Row-by-row PNG writer for custom streaming operations
-pub const PngRowWriter = streaming.PngRowWriter;
 
 test {
     std.testing.refAllDecls(@This());

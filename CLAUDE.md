@@ -20,7 +20,6 @@
 - `src/jpeg.zig` - JPEG decoder (baseline + progressive)
 - `src/png.zig` - PNG decoder/encoder
 - `src/image.zig` - Image data structure
-- `src/streaming.zig` - Low-memory streaming operations
 - `src/decode_context.zig` - Shared PNG decoding context
 - `src/cli.zig` - Command-line interface
 

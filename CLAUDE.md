@@ -49,7 +49,7 @@ Test fixtures are in `test/fixtures/`.
 - Explicit error handling
 - Support custom allocators
 - Prefer `*const` for read-only pointer parameters
-- Use `const Self = @This()` for struct self-reference
+- Use `@This()` directly (see docs/CODING_CONVENTIONS.md)
 
 ### Variable Naming
 

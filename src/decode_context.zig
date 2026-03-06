@@ -35,7 +35,7 @@ pub const DecodeError = error{
 };
 
 /// Shared PNG decoding context - extracts header info and decompressed scanlines
-/// from a PNG reader. Used by both full decode and streaming operations.
+/// from a PNG reader. Used by png.zig for decoding.
 pub const PngDecodeContext = struct {
 
     width: u32,
@@ -234,7 +234,7 @@ pub fn applyFilter(filter_type: u8, filtered: []const u8, prev_row: ?[]const u8,
     }
 }
 
-pub fn paethPredictor(a: i32, b: i32, c: i32) u8 {
+fn paethPredictor(a: i32, b: i32, c: i32) u8 {
     const p = a + b - c;
     const pa = @abs(p - a);
     const pb = @abs(p - b);

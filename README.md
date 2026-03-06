@@ -6,11 +6,7 @@ This was written by AI.
 
 ## Documentation
 
-- **[Usage Guide](docs/USAGE.md)** - API usage and quick start
-- **[Architecture](docs/ARCHITECTURE.md)** - Project structure and design
-- **[Error Handling](docs/ERROR_HANDLING.md)** - Error handling patterns
-- **[Examples](docs/EXAMPLES.md)** - Practical code examples
-- **[API Reference](docs/API.md)** - Complete API documentation
+- **[Coding Conventions](docs/CODING_CONVENTIONS.md)** - Zig conventions for this project
 - Generate API docs: `zig build docs` (outputs to `zig-out/docs/api`)
 
 ## Features
@@ -19,7 +15,7 @@ This was written by AI.
 - **Encode**: PNG
 - Crop, resize (bilinear), thumbnail generation
 - Rotate (90/180/270) and flip (horizontal/vertical)
-- Low-memory streaming API for large images
+- JPEG encoding (baseline)
 - CLI tool for image processing
 
 ## Format Support
@@ -66,7 +62,6 @@ zig build
 zig build test              # Run unit tests (58 tests, fast, no C deps)
 zig build integration-test  # Run integration tests (11 tests, vs stb_image)
 zig build test-all          # Run all tests (69 tests)
-zig build test-large        # Test large image streaming (10000×10000)
 zig build bench             # Performance benchmarks
 ```
 
@@ -126,7 +121,6 @@ test "PNG decoder produces same output as stb_image for RGB" {
 - Edge cases (interlacing, different color types, subsampling)
 - Error handling (invalid files, truncated data, corrupt markers)
 - Image operations (crop, resize, rotate, flip)
-- Streaming resize with minimal memory
 - Round-trip encoding/decoding
 - Memory leak detection
 
@@ -178,62 +172,18 @@ defer resized.deinit();
 try zpix.savePngFile(&resized, "output.png");
 ```
 
-### Reader/Writer API
-
-For streaming and custom I/O sources:
+### Memory API
 
 ```zig
 const zpix = @import("zpix");
 
-// Decode from any std.Io.Reader
-var file = try std.fs.cwd().openFile("input.png", .{});
-defer file.close();
-var buf: [8192]u8 = undefined;
-var file_reader = file.reader(&buf);
-
-var image = try zpix.decodePng(allocator, &file_reader.interface);
+// Load/save from memory buffers
+var image = try zpix.loadPngMemory(allocator, png_bytes);
 defer image.deinit();
 
-// Encode to any std.Io.Writer
-var out_file = try std.fs.cwd().createFile("output.png", .{});
-defer out_file.close();
-var out_buf: [8192]u8 = undefined;
-var file_writer = out_file.writer(&out_buf);
-
-try zpix.encodePng(allocator, &image, &file_writer.interface);
-try file_writer.interface.flush();
+const output = try zpix.savePngMemory(allocator, &image);
+defer allocator.free(output);
 ```
-
-### Low-Memory Streaming
-
-For large images on memory-constrained systems, use incremental processing.
-**Note:** For typical use cases, prefer the simpler `Image` API (crop, resize, etc).
-
-```zig
-// Streaming resize: decompresses PNG row-by-row while resizing
-// Memory: O(compressed_size + width) instead of O(width × height)
-try zpix.streamingResize(allocator, &reader, &writer, new_width, new_height);
-
-// For custom streaming operations, use the row-based decoder:
-var decoder = try zpix.PngStreamingDecoder.init(allocator, &reader, .{});
-defer decoder.deinit();
-
-while (try decoder.readRow()) |row_data| {
-    // Process one row at a time
-    // row_data: []const u8 (width × channels bytes)
-}
-```
-
-**Memory comparison (4000×3000 RGB image):**
-| Operation | Standard API | Streaming API |
-|-----------|--------------|---------------|
-| Resize | ~36 MB (full decoded image) | ~3.6 MB (compressed + 2 rows) |
-
-**Trade-offs:**
-- ✓ Dramatically lower memory usage
-- ✓ Works on memory-constrained systems
-- ✗ Cannot seek backward (sequential only)
-- ✗ More complex API
 
 ## Benchmarks
 

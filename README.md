@@ -2,6 +2,8 @@
 
 A pure Zig image library for generating thumbnails and tiles. Decodes JPEG and PNG, encodes PNG. No C dependencies in the core library.
 
+This was written by AI.
+
 ## Documentation
 
 - **[Usage Guide](docs/USAGE.md)** - API usage and quick start

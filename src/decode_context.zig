@@ -10,6 +10,7 @@ pub const ChunkType = struct {
     pub const IDAT = [4]u8{ 'I', 'D', 'A', 'T' };
     pub const IEND = [4]u8{ 'I', 'E', 'N', 'D' };
     pub const PLTE = [4]u8{ 'P', 'L', 'T', 'E' };
+    pub const tRNS = [4]u8{ 't', 'R', 'N', 'S' };
 };
 
 pub const ColorType = enum(u8) {
@@ -42,8 +43,16 @@ pub const PngDecodeContext = struct {
     height: u32,
     channels: u8,
     interlace: u8,
+    color_type: ColorType,
     raw_data: []u8,
     allocator: Allocator,
+
+    /// Palette for indexed color PNGs (up to 256 RGB triplets).
+    palette: [256][3]u8 = undefined,
+    palette_len: u16 = 0,
+    /// Per-index alpha values from tRNS chunk. Entries beyond trns_len are opaque (255).
+    trns: [256]u8 = [_]u8{255} ** 256,
+    trns_len: u16 = 0,
 
     pub fn init(allocator: Allocator, reader: *std.Io.Reader) (DecodeError || Allocator.Error || std.Io.Reader.Error)!@This() {
         // Verify PNG signature
@@ -56,10 +65,15 @@ pub const PngDecodeContext = struct {
         var width: u32 = 0;
         var height: u32 = 0;
         var channels: u8 = 3;
+        var color_type: ColorType = .rgb;
         var interlace: u8 = 0;
         var ihdr_found: bool = false;
         var idat_data: std.ArrayList(u8) = .empty;
         defer idat_data.deinit(allocator);
+        var palette: [256][3]u8 = undefined;
+        var palette_len: u16 = 0;
+        var trns: [256]u8 = [_]u8{255} ** 256;
+        var trns_len: u16 = 0;
 
         // Parse chunks
         while (true) {
@@ -75,7 +89,7 @@ pub const PngDecodeContext = struct {
                 if (width > Image.MAX_DIMENSION or height > Image.MAX_DIMENSION) return DecodeError.InvalidImageData;
                 const bit_depth = try reader.takeByte();
                 const ct = try reader.takeByte();
-                const color_type = std.meta.intToEnum(ColorType, ct) catch return DecodeError.UnsupportedColorType;
+                color_type = std.meta.intToEnum(ColorType, ct) catch return DecodeError.UnsupportedColorType;
                 _ = try reader.takeByte(); // compression
                 _ = try reader.takeByte(); // filter
                 interlace = try reader.takeByte();
@@ -92,7 +106,7 @@ pub const PngDecodeContext = struct {
                     .grayscale_alpha => 2,
                     .rgb => 3,
                     .rgba => 4,
-                    else => return DecodeError.UnsupportedColorType,
+                    .indexed => 1, // 1 byte per pixel (palette index)
                 };
 
                 // Skip CRC
@@ -108,6 +122,25 @@ pub const PngDecodeContext = struct {
                 }
                 // Skip CRC
                 try reader.discardAll(4);
+            } else if (std.mem.eql(u8, chunk_type, &ChunkType.PLTE)) {
+                // Palette: sequence of RGB triplets
+                const entry_count = length / 3;
+                if (entry_count > 256 or length % 3 != 0) return DecodeError.InvalidChunk;
+                for (0..entry_count) |i| {
+                    const rgb = try reader.takeArray(3);
+                    palette[i] = rgb.*;
+                }
+                palette_len = @intCast(entry_count);
+                try reader.discardAll(4); // CRC
+            } else if (std.mem.eql(u8, chunk_type, &ChunkType.tRNS)) {
+                // Transparency: one alpha byte per palette entry
+                const count = @min(length, 256);
+                for (0..count) |i| {
+                    trns[i] = try reader.takeByte();
+                }
+                trns_len = @intCast(count);
+                if (length > count) try reader.discardAll(length - count);
+                try reader.discardAll(4); // CRC
             } else if (std.mem.eql(u8, chunk_type, &ChunkType.IEND)) {
                 break;
             } else {
@@ -139,9 +172,14 @@ pub const PngDecodeContext = struct {
             .width = width,
             .height = height,
             .channels = channels,
+            .color_type = color_type,
             .interlace = interlace,
             .raw_data = raw_data,
             .allocator = allocator,
+            .palette = palette,
+            .palette_len = palette_len,
+            .trns = trns,
+            .trns_len = trns_len,
         };
     }
 

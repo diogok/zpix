@@ -14,12 +14,54 @@ fn decode(allocator: Allocator, reader: *std.Io.Reader) !Image {
     var ctx = try PngDecodeContext.init(allocator, reader);
     defer ctx.deinit();
 
-    // Reconstruct image from filtered scanlines
-    if (ctx.interlace == 1) {
-        return reconstructInterlacedImage(allocator, ctx.raw_data, ctx.width, ctx.height, ctx.channels);
-    } else {
-        return reconstructImage(allocator, ctx.raw_data, ctx.width, ctx.height, ctx.channels);
+    // Reconstruct image from filtered scanlines (1 byte per pixel for indexed)
+    var indexed_img = if (ctx.interlace == 1)
+        try reconstructInterlacedImage(allocator, ctx.raw_data, ctx.width, ctx.height, ctx.channels)
+    else
+        try reconstructImage(allocator, ctx.raw_data, ctx.width, ctx.height, ctx.channels);
+
+    // For indexed color, expand palette indices to RGBA
+    if (ctx.color_type == .indexed) {
+        defer indexed_img.deinit();
+        if (ctx.palette_len == 0) return DecodeError.InvalidImageData;
+        return expandIndexedToRgba(allocator, &indexed_img, &ctx.palette, ctx.palette_len, &ctx.trns, ctx.trns_len);
     }
+
+    return indexed_img;
+}
+
+/// Expand a 1-channel indexed image to 4-channel RGBA using the palette and tRNS data.
+fn expandIndexedToRgba(
+    allocator: Allocator,
+    indexed: *const Image,
+    palette: *const [256][3]u8,
+    palette_len: u16,
+    trns: *const [256]u8,
+    trns_len: u16,
+) !Image {
+    const pixel_count = @as(usize, indexed.width) * @as(usize, indexed.height);
+    var img = try Image.init(allocator, indexed.width, indexed.height, 4);
+    errdefer img.deinit();
+
+    const has_transparency = trns_len > 0;
+
+    for (0..pixel_count) |i| {
+        const index = indexed.data[i];
+        if (index >= palette_len) {
+            // Index out of palette range — treat as transparent black
+            img.data[i * 4 + 0] = 0;
+            img.data[i * 4 + 1] = 0;
+            img.data[i * 4 + 2] = 0;
+            img.data[i * 4 + 3] = 0;
+        } else {
+            img.data[i * 4 + 0] = palette[index][0];
+            img.data[i * 4 + 1] = palette[index][1];
+            img.data[i * 4 + 2] = palette[index][2];
+            img.data[i * 4 + 3] = if (has_transparency) trns[index] else 255;
+        }
+    }
+
+    return img;
 }
 
 /// Load PNG from file path

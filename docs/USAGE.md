@@ -10,42 +10,48 @@ Add zpix as a dependency in your `build.zig.zon`, then import the module:
 const zpix = @import("zpix");
 ```
 
+File-based APIs take an `io: std.Io` instance as their first argument. Get
+one from "Juicy Main" (`init.io`) or, in tests, from `std.testing.io`.
+
 ### Loading Images
 
 ```zig
-const allocator = std.heap.page_allocator;
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
+    const allocator = init.gpa;
 
-// Auto-detect format by magic bytes (PNG or JPEG)
-var image = try zpix.loadFile(allocator, "photo.jpg");
-defer image.deinit();
+    // Auto-detect format by magic bytes (PNG or JPEG)
+    var image = try zpix.loadFile(io, allocator, "photo.jpg");
+    defer image.deinit();
 
-// Or load a specific format
-var png = try zpix.loadPngFile(allocator, "image.png");
-defer png.deinit();
+    // Or load a specific format
+    var png = try zpix.loadPngFile(io, allocator, "image.png");
+    defer png.deinit();
 
-var jpeg = try zpix.loadJpegFile(allocator, "photo.jpg");
-defer jpeg.deinit();
+    var jpeg = try zpix.loadJpegFile(io, allocator, "photo.jpg");
+    defer jpeg.deinit();
 
-// Load from memory buffers
-var from_mem = try zpix.loadPngMemory(allocator, png_bytes);
-defer from_mem.deinit();
+    // Load from memory buffers (no io needed)
+    var from_mem = try zpix.loadPngMemory(allocator, png_bytes);
+    defer from_mem.deinit();
 
-var from_jpeg = try zpix.loadJpegMemory(allocator, jpeg_bytes);
-defer from_jpeg.deinit();
+    var from_jpeg = try zpix.loadJpegMemory(allocator, jpeg_bytes);
+    defer from_jpeg.deinit();
+}
 ```
 
 ### Saving Images
 
 ```zig
 // Auto-detect format by file extension (.png, .jpg, .jpeg)
-try zpix.saveFile(&image, "output.png");
-try zpix.saveFile(&image, "output.jpg");  // JPEG quality defaults to 90
+try zpix.saveFile(io, &image, "output.png");
+try zpix.saveFile(io, &image, "output.jpg");  // JPEG quality defaults to 90
 
 // Or save a specific format
-try zpix.savePngFile(&image, "output.png");
-try zpix.saveJpegFile(&image, "output.jpg", 85);  // quality 1-100
+try zpix.savePngFile(io, &image, "output.png");
+try zpix.saveJpegFile(io, &image, "output.jpg", 85);  // quality 1-100
 
-// Save to memory buffers
+// Save to memory buffers (no io needed)
 const png_buf = try zpix.savePngMemory(allocator, &image);
 defer allocator.free(png_buf);
 
@@ -58,7 +64,7 @@ defer allocator.free(jpeg_buf);
 All operations return a new `Image` that must be freed with `deinit()`.
 
 ```zig
-var image = try zpix.loadFile(allocator, "photo.jpg");
+var image = try zpix.loadFile(io, allocator, "photo.jpg");
 defer image.deinit();
 
 // Crop a region (x, y, width, height)

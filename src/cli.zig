@@ -29,208 +29,169 @@ const usage =
     \\
 ;
 
-fn printFmt(comptime fmt: []const u8, args: anytype) void {
-    var buf: [1024]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
-    _ = std.fs.File.stdout().write(msg) catch {};
-}
+const Cli = struct {
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    out: *std.Io.Writer,
+    err: *std.Io.Writer,
 
-fn printErrFmt(comptime fmt: []const u8, args: anytype) void {
-    var buf: [1024]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
-    _ = std.fs.File.stderr().write(msg) catch {};
-}
-
-fn writeErr(msg: []const u8) void {
-    _ = std.fs.File.stderr().write(msg) catch {};
-}
-
-fn writeOut(msg: []const u8) void {
-    _ = std.fs.File.stdout().write(msg) catch {};
-}
-
-fn parseIntOrExit(value: []const u8, field_name: []const u8) u32 {
-    return std.fmt.parseInt(u32, value, 10) catch {
-        printErrFmt("Error: invalid {s}\n", .{field_name});
-        std.process.exit(1);
-    };
-}
-
-fn loadImageOrExit(allocator: std.mem.Allocator, path: []const u8) zpix.Image {
-    return zpix.loadFile(allocator, path) catch |err| {
-        printErrFmt("Error loading {s}: {}\n", .{ path, err });
-        std.process.exit(1);
-    };
-}
-
-fn saveImageOrExit(path: []const u8, img: *const zpix.Image) void {
-    zpix.saveFile(img, path) catch |err| {
-        printErrFmt("Error saving {s}: {}\n", .{ path, err });
-        std.process.exit(1);
-    };
-}
-
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
-
-    if (args.len < 2) {
-        writeErr(usage);
+    fn fail(self: Cli, comptime fmt: []const u8, args: anytype) noreturn {
+        self.err.print(fmt, args) catch {};
+        self.err.flush() catch {};
         std.process.exit(1);
     }
+
+    fn parseInt(self: Cli, value: []const u8, field_name: []const u8) u32 {
+        return std.fmt.parseInt(u32, value, 10) catch
+            self.fail("Error: invalid {s}\n", .{field_name});
+    }
+
+    fn loadImage(self: Cli, path: []const u8) zpix.Image {
+        return zpix.loadFile(self.io, self.allocator, path) catch |err|
+            self.fail("Error loading {s}: {}\n", .{ path, err });
+    }
+
+    fn saveImage(self: Cli, path: []const u8, img: *const zpix.Image) void {
+        zpix.saveFile(self.io, img, path) catch |err|
+            self.fail("Error saving {s}: {}\n", .{ path, err });
+    }
+};
+
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
+
+    var out_buf: [1024]u8 = undefined;
+    var err_buf: [1024]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writer(io, &out_buf);
+    var stderr_writer = std.Io.File.stderr().writer(io, &err_buf);
+    defer stdout_writer.flush() catch {};
+    defer stderr_writer.flush() catch {};
+
+    const cli: Cli = .{
+        .io = io,
+        .allocator = init.gpa,
+        .out = &stdout_writer.interface,
+        .err = &stderr_writer.interface,
+    };
+
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
+
+    if (args.len < 2) cli.fail("{s}", .{usage});
 
     const command = args[1];
 
     if (std.mem.eql(u8, command, "crop")) {
-        runCrop(allocator, args);
+        runCrop(cli, args);
     } else if (std.mem.eql(u8, command, "resize")) {
-        runResize(allocator, args);
+        runResize(cli, args);
     } else if (std.mem.eql(u8, command, "thumbnail")) {
-        runThumbnail(allocator, args);
+        runThumbnail(cli, args);
     } else if (std.mem.eql(u8, command, "rotate")) {
-        runRotate(allocator, args);
+        runRotate(cli, args);
     } else if (std.mem.eql(u8, command, "flip")) {
-        runFlip(allocator, args);
+        runFlip(cli, args);
     } else if (std.mem.eql(u8, command, "help") or std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "-h")) {
-        writeOut(usage);
+        try cli.out.writeAll(usage);
     } else {
-        printErrFmt("Unknown command: {s}\n\n", .{command});
-        writeErr(usage);
-        std.process.exit(1);
+        cli.fail("Unknown command: {s}\n\n{s}", .{ command, usage });
     }
 }
 
-fn runCrop(allocator: std.mem.Allocator, args: []const []const u8) void {
-    if (args.len != 8) {
-        writeErr("Error: crop requires 6 arguments: <input> <output> <x> <y> <width> <height>\n");
-        std.process.exit(1);
-    }
+fn runCrop(cli: Cli, args: []const [:0]const u8) void {
+    if (args.len != 8)
+        cli.fail("Error: crop requires 6 arguments: <input> <output> <x> <y> <width> <height>\n", .{});
 
     const input_path = args[2];
     const output_path = args[3];
-    const x = parseIntOrExit(args[4], "x coordinate");
-    const y = parseIntOrExit(args[5], "y coordinate");
-    const width = parseIntOrExit(args[6], "width");
-    const height = parseIntOrExit(args[7], "height");
+    const x = cli.parseInt(args[4], "x coordinate");
+    const y = cli.parseInt(args[5], "y coordinate");
+    const width = cli.parseInt(args[6], "width");
+    const height = cli.parseInt(args[7], "height");
 
-    var img = loadImageOrExit(allocator, input_path);
+    var img = cli.loadImage(input_path);
     defer img.deinit();
 
-    var cropped = img.crop(x, y, width, height) catch |err| {
-        printErrFmt("Error cropping: {}\n", .{err});
-        std.process.exit(1);
-    };
+    var cropped = img.crop(x, y, width, height) catch |err|
+        cli.fail("Error cropping: {}\n", .{err});
     defer cropped.deinit();
 
-    saveImageOrExit(output_path, &cropped);
-    printFmt("Cropped {s} -> {s} ({d}x{d})\n", .{ input_path, output_path, width, height });
+    cli.saveImage(output_path, &cropped);
+    cli.out.print("Cropped {s} -> {s} ({d}x{d})\n", .{ input_path, output_path, width, height }) catch {};
 }
 
-fn runResize(allocator: std.mem.Allocator, args: []const []const u8) void {
-    if (args.len != 6) {
-        writeErr("Error: resize requires 4 arguments: <input> <output> <width> <height>\n");
-        std.process.exit(1);
-    }
+fn runResize(cli: Cli, args: []const [:0]const u8) void {
+    if (args.len != 6)
+        cli.fail("Error: resize requires 4 arguments: <input> <output> <width> <height>\n", .{});
 
     const input_path = args[2];
     const output_path = args[3];
-    const width = parseIntOrExit(args[4], "width");
-    const height = parseIntOrExit(args[5], "height");
+    const width = cli.parseInt(args[4], "width");
+    const height = cli.parseInt(args[5], "height");
 
-    var img = loadImageOrExit(allocator, input_path);
+    var img = cli.loadImage(input_path);
     defer img.deinit();
 
-    var resized = img.resize(width, height) catch |err| {
-        printErrFmt("Error resizing: {}\n", .{err});
-        std.process.exit(1);
-    };
+    var resized = img.resize(width, height) catch |err|
+        cli.fail("Error resizing: {}\n", .{err});
     defer resized.deinit();
 
-    saveImageOrExit(output_path, &resized);
-    printFmt("Resized {s} -> {s} ({d}x{d})\n", .{ input_path, output_path, width, height });
+    cli.saveImage(output_path, &resized);
+    cli.out.print("Resized {s} -> {s} ({d}x{d})\n", .{ input_path, output_path, width, height }) catch {};
 }
 
-fn runThumbnail(allocator: std.mem.Allocator, args: []const []const u8) void {
-    if (args.len != 5) {
-        writeErr("Error: thumbnail requires 3 arguments: <input> <output> <size>\n");
-        std.process.exit(1);
-    }
+fn runThumbnail(cli: Cli, args: []const [:0]const u8) void {
+    if (args.len != 5)
+        cli.fail("Error: thumbnail requires 3 arguments: <input> <output> <size>\n", .{});
 
     const input_path = args[2];
     const output_path = args[3];
-    const size = parseIntOrExit(args[4], "size");
+    const size = cli.parseInt(args[4], "size");
 
-    var img = loadImageOrExit(allocator, input_path);
+    var img = cli.loadImage(input_path);
     defer img.deinit();
 
     const min_dim = @min(img.width, img.height);
     const crop_x = (img.width - min_dim) / 2;
     const crop_y = (img.height - min_dim) / 2;
 
-    var cropped = img.crop(crop_x, crop_y, min_dim, min_dim) catch |err| {
-        printErrFmt("Error cropping: {}\n", .{err});
-        std.process.exit(1);
-    };
+    var cropped = img.crop(crop_x, crop_y, min_dim, min_dim) catch |err|
+        cli.fail("Error cropping: {}\n", .{err});
     defer cropped.deinit();
 
-    var thumbnail = cropped.resize(size, size) catch |err| {
-        printErrFmt("Error resizing: {}\n", .{err});
-        std.process.exit(1);
-    };
+    var thumbnail = cropped.resize(size, size) catch |err|
+        cli.fail("Error resizing: {}\n", .{err});
     defer thumbnail.deinit();
 
-    saveImageOrExit(output_path, &thumbnail);
-    printFmt("Thumbnail {s} -> {s} ({d}x{d})\n", .{ input_path, output_path, size, size });
+    cli.saveImage(output_path, &thumbnail);
+    cli.out.print("Thumbnail {s} -> {s} ({d}x{d})\n", .{ input_path, output_path, size, size }) catch {};
 }
 
-fn runRotate(allocator: std.mem.Allocator, args: []const []const u8) void {
-    if (args.len != 5) {
-        writeErr("Error: rotate requires 3 arguments: <input> <output> <angle>\n");
-        writeErr("       angle must be 90, 180, or 270\n");
-        std.process.exit(1);
-    }
+fn runRotate(cli: Cli, args: []const [:0]const u8) void {
+    if (args.len != 5)
+        cli.fail("Error: rotate requires 3 arguments: <input> <output> <angle>\n       angle must be 90, 180, or 270\n", .{});
 
     const input_path = args[2];
     const output_path = args[3];
-    const angle = parseIntOrExit(args[4], "angle");
+    const angle = cli.parseInt(args[4], "angle");
 
-    var img = loadImageOrExit(allocator, input_path);
+    var img = cli.loadImage(input_path);
     defer img.deinit();
 
     var rotated = switch (angle) {
-        90 => img.rotate90() catch |err| {
-            printErrFmt("Error rotating: {}\n", .{err});
-            std.process.exit(1);
-        },
-        180 => img.rotate180() catch |err| {
-            printErrFmt("Error rotating: {}\n", .{err});
-            std.process.exit(1);
-        },
-        270 => img.rotate270() catch |err| {
-            printErrFmt("Error rotating: {}\n", .{err});
-            std.process.exit(1);
-        },
-        else => {
-            writeErr("Error: angle must be 90, 180, or 270\n");
-            std.process.exit(1);
-        },
-    };
+        90 => img.rotate90(),
+        180 => img.rotate180(),
+        270 => img.rotate270(),
+        else => cli.fail("Error: angle must be 90, 180, or 270\n", .{}),
+    } catch |err| cli.fail("Error rotating: {}\n", .{err});
     defer rotated.deinit();
 
-    saveImageOrExit(output_path, &rotated);
-    printFmt("Rotated {s} -> {s} ({d}° clockwise)\n", .{ input_path, output_path, angle });
+    cli.saveImage(output_path, &rotated);
+    cli.out.print("Rotated {s} -> {s} ({d}° clockwise)\n", .{ input_path, output_path, angle }) catch {};
 }
 
-fn runFlip(allocator: std.mem.Allocator, args: []const []const u8) void {
-    if (args.len != 5) {
-        writeErr("Error: flip requires 3 arguments: <input> <output> <direction>\n");
-        writeErr("       direction must be 'h' (horizontal) or 'v' (vertical)\n");
-        std.process.exit(1);
-    }
+fn runFlip(cli: Cli, args: []const [:0]const u8) void {
+    if (args.len != 5)
+        cli.fail("Error: flip requires 3 arguments: <input> <output> <direction>\n       direction must be 'h' (horizontal) or 'v' (vertical)\n", .{});
 
     const input_path = args[2];
     const output_path = args[3];
@@ -238,27 +199,17 @@ fn runFlip(allocator: std.mem.Allocator, args: []const []const u8) void {
     const horizontal = std.mem.eql(u8, direction, "h") or std.mem.eql(u8, direction, "horizontal");
     const vertical = std.mem.eql(u8, direction, "v") or std.mem.eql(u8, direction, "vertical");
 
-    if (!horizontal and !vertical) {
-        writeErr("Error: direction must be 'h' (horizontal) or 'v' (vertical)\n");
-        std.process.exit(1);
-    }
+    if (!horizontal and !vertical)
+        cli.fail("Error: direction must be 'h' (horizontal) or 'v' (vertical)\n", .{});
 
-    var img = loadImageOrExit(allocator, input_path);
+    var img = cli.loadImage(input_path);
     defer img.deinit();
 
-    var flipped = if (horizontal)
-        img.flipHorizontal() catch |err| {
-            printErrFmt("Error flipping: {}\n", .{err});
-            std.process.exit(1);
-        }
-    else
-        img.flipVertical() catch |err| {
-            printErrFmt("Error flipping: {}\n", .{err});
-            std.process.exit(1);
-        };
+    var flipped = (if (horizontal) img.flipHorizontal() else img.flipVertical()) catch |err|
+        cli.fail("Error flipping: {}\n", .{err});
     defer flipped.deinit();
 
-    saveImageOrExit(output_path, &flipped);
+    cli.saveImage(output_path, &flipped);
     const dir_name: []const u8 = if (horizontal) "horizontally" else "vertically";
-    printFmt("Flipped {s} -> {s} ({s})\n", .{ input_path, output_path, dir_name });
+    cli.out.print("Flipped {s} -> {s} ({s})\n", .{ input_path, output_path, dir_name }) catch {};
 }

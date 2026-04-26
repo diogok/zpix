@@ -67,6 +67,15 @@ pub fn build(b: *std.Build) void {
     error_tests.root_module.addImport("zpix", zpix_mod);
     const run_error_tests = b.addRunArtifact(error_tests);
 
+    // Translate the aggregated stb header once; consumers import it as `c`.
+    const translate_stb = b.addTranslateC(.{
+        .root_source_file = b.path("reference/stb.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    translate_stb.addIncludePath(b.path("reference"));
+    const stb_c_mod = translate_stb.createModule();
+
     // Integration tests: compare zpix output against stb_image (C reference).
     // The stb C dependency is only compiled when these targets are requested.
     const compare_tests = b.addTest(.{
@@ -78,6 +87,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     compare_tests.root_module.addImport("zpix", zpix_mod);
+    compare_tests.root_module.addImport("c", stb_c_mod);
     linkStbReference(compare_tests, b, &.{"-std=c99"});
 
     const run_compare_tests = b.addRunArtifact(compare_tests);
@@ -91,6 +101,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     jpeg_tests.root_module.addImport("zpix", zpix_mod);
+    jpeg_tests.root_module.addImport("c", stb_c_mod);
     linkStbReference(jpeg_tests, b, &.{"-std=c99"});
 
     const run_jpeg_tests = b.addRunArtifact(jpeg_tests);
@@ -104,6 +115,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     jpeg_encode_tests.root_module.addImport("zpix", zpix_mod);
+    jpeg_encode_tests.root_module.addImport("c", stb_c_mod);
     linkStbReference(jpeg_encode_tests, b, &.{"-std=c99"});
     const run_jpeg_encode_tests = b.addRunArtifact(jpeg_encode_tests);
 
@@ -150,6 +162,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     bench.root_module.addImport("zpix", zpix_mod);
+    bench.root_module.addImport("c", stb_c_mod);
     linkStbReference(bench, b, &.{ "-std=c99", "-O2" });
 
     b.installArtifact(bench);

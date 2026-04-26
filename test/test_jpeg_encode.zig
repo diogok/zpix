@@ -110,7 +110,7 @@ test "JPEG encode round-trip: larger image" {
     const allocator = std.testing.allocator;
 
     // Double-lossy test: load JPEG, re-encode, decode
-    var img = try zpix.loadJpegFile(allocator, "test/fixtures/landscape_600x400.jpg");
+    var img = try zpix.loadJpegFile(std.testing.io, allocator, "test/fixtures/landscape_600x400.jpg");
     defer img.deinit();
 
     const jpeg_data = try zpix.saveJpegMemory(allocator, &img, 90);

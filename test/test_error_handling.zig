@@ -218,21 +218,21 @@ test "PNG: zero height" {
 test "JPEG: nonexistent file" {
     const allocator = std.testing.allocator;
 
-    const result = zpix.loadJpegFile(allocator, "test/fixtures/does_not_exist.jpg");
+    const result = zpix.loadJpegFile(std.testing.io, allocator, "test/fixtures/does_not_exist.jpg");
     try std.testing.expectError(error.FileNotFound, result);
 }
 
 test "PNG: nonexistent file" {
     const allocator = std.testing.allocator;
 
-    const result = zpix.loadPngFile(allocator, "test/fixtures/does_not_exist.png");
+    const result = zpix.loadPngFile(std.testing.io, allocator, "test/fixtures/does_not_exist.png");
     try std.testing.expectError(error.FileNotFound, result);
 }
 
 test "JPEG: directory instead of file" {
     const allocator = std.testing.allocator;
 
-    const result = zpix.loadJpegFile(allocator, "test/fixtures");
+    const result = zpix.loadJpegFile(std.testing.io, allocator, "test/fixtures");
     // Should fail (either IsDir or some read error)
     try std.testing.expect(std.meta.isError(result));
 }
@@ -240,7 +240,7 @@ test "JPEG: directory instead of file" {
 test "PNG: directory instead of file" {
     const allocator = std.testing.allocator;
 
-    const result = zpix.loadPngFile(allocator, "test/fixtures");
+    const result = zpix.loadPngFile(std.testing.io, allocator, "test/fixtures");
     // Should fail (either IsDir or some read error)
     try std.testing.expect(std.meta.isError(result));
 }

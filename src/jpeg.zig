@@ -234,15 +234,9 @@ const BitReader = struct {
 };
 
 /// Load JPEG from file path
-pub fn loadFromFile(allocator: Allocator, path: []const u8) !Image {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-
-    const stat = try file.stat();
-    const data = try allocator.alloc(u8, stat.size);
+pub fn loadFromFile(io: std.Io, allocator: Allocator, path: []const u8) !Image {
+    const data = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(Image.MAX_FILE_SIZE));
     defer allocator.free(data);
-
-    _ = try file.readAll(data);
     return decodeMemory(allocator, data);
 }
 

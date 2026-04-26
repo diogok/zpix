@@ -54,6 +54,35 @@ Test fixtures are in `test/fixtures/`.
 - Prefer `*const` for read-only pointer parameters
 - Use `@This()` directly (see docs/CODING_CONVENTIONS.md)
 
+### Io threading (Zig 0.16)
+
+Public APIs that touch the filesystem take an `io: std.Io` parameter as the
+**first** argument, before the allocator. Memory-only variants don't need it.
+
+```zig
+// File-based (needs io)
+pub fn loadFromFile(io: std.Io, allocator: Allocator, path: []const u8) !Image
+pub fn saveToFile(io: std.Io, img: *const Image, path: []const u8) !void
+
+// Memory-based (unchanged)
+pub fn loadFromMemory(allocator: Allocator, data: []const u8) !Image
+pub fn saveToMemory(allocator: Allocator, img: *const Image) ![]u8
+```
+
+- Executables get `io` from "Juicy Main": `pub fn main(init: std.process.Init) !void`
+  → `init.io`, `init.gpa`, `init.arena`, `init.minimal.args`.
+- Tests use `std.testing.io`.
+- Library code never constructs its own `Io` — always thread it through from
+  the entry point.
+
+When opening files inside the library, use the new APIs:
+
+```zig
+const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+defer file.close(io);
+var file_reader = file.reader(io, buf);
+```
+
 ### Variable Naming
 
 **Use descriptive full names by default:**

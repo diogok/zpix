@@ -548,12 +548,12 @@ fn encode(_: Allocator, img: *const Image, writer: *std.Io.Writer, quality: u8) 
 }
 
 /// Save JPEG to file path
-pub fn saveToFile(img: *const Image, path: []const u8, quality: u8) !void {
-    const file = try std.fs.cwd().createFile(path, .{});
-    defer file.close();
+pub fn saveToFile(io: std.Io, img: *const Image, path: []const u8, quality: u8) !void {
+    const file = try std.Io.Dir.cwd().createFile(io, path, .{});
+    defer file.close(io);
 
     var buf: [8192]u8 = undefined;
-    var file_writer = file.writer(&buf);
+    var file_writer = file.writer(io, &buf);
 
     try encode(img.allocator, img, &file_writer.interface, quality);
     try file_writer.interface.flush();

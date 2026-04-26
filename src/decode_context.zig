@@ -89,7 +89,7 @@ pub const PngDecodeContext = struct {
                 if (width > Image.MAX_DIMENSION or height > Image.MAX_DIMENSION) return DecodeError.InvalidImageData;
                 const bit_depth = try reader.takeByte();
                 const ct = try reader.takeByte();
-                color_type = std.meta.intToEnum(ColorType, ct) catch return DecodeError.UnsupportedColorType;
+                color_type = std.enums.fromInt(ColorType, ct) orelse return DecodeError.UnsupportedColorType;
                 _ = try reader.takeByte(); // compression
                 _ = try reader.takeByte(); // filter
                 interlace = try reader.takeByte();

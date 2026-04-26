@@ -65,13 +65,13 @@ fn expandIndexedToRgba(
 }
 
 /// Load PNG from file path
-pub fn loadFromFile(allocator: Allocator, path: []const u8) !Image {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
+pub fn loadFromFile(io: std.Io, allocator: Allocator, path: []const u8) !Image {
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
 
     const buf = try allocator.alloc(u8, 65536);
     defer allocator.free(buf);
-    var file_reader = file.reader(buf);
+    var file_reader = file.reader(io, buf);
 
     return decode(allocator, &file_reader.interface);
 }
@@ -186,12 +186,12 @@ fn encode(allocator: Allocator, img: *const Image, writer: *std.Io.Writer) !void
 }
 
 /// Save PNG to file path
-pub fn saveToFile(img: *const Image, path: []const u8) !void {
-    const file = try std.fs.cwd().createFile(path, .{});
-    defer file.close();
+pub fn saveToFile(io: std.Io, img: *const Image, path: []const u8) !void {
+    const file = try std.Io.Dir.cwd().createFile(io, path, .{});
+    defer file.close(io);
 
     var buf: [8192]u8 = undefined;
-    var file_writer = file.writer(&buf);
+    var file_writer = file.writer(io, &buf);
 
     try encode(img.allocator, img, &file_writer.interface);
     try file_writer.interface.flush();

@@ -29,11 +29,11 @@ The library has zero C dependencies. stb_image is only linked for integration te
 ### Decoding (File → Image)
 
 ```
-zpix.loadFile(path)
+zpix.loadFile(io, allocator, path)
   │
   ├─ read first 8 bytes → detectFormat()
   │
-  ├─ PNG path: png.loadFromFile()
+  ├─ PNG path: png.loadFromFile(io, allocator, path)
   │   ├─ open file, buffered reader
   │   ├─ PngDecodeContext.init(reader)
   │   │   ├─ verify 8-byte PNG signature
@@ -45,8 +45,8 @@ zpix.loadFile(path)
   │   │   └─ for each scanline: apply inverse filter → pixel data
   │   └─ return Image
   │
-  └─ JPEG path: jpeg.loadFromFile()
-      ├─ read entire file into memory
+  └─ JPEG path: jpeg.loadFromFile(io, allocator, path)
+      ├─ read entire file into memory (Dir.readFileAlloc)
       └─ decodeMemory()
           ├─ verify SOI marker (FF D8)
           ├─ parse markers: DQT, DHT, SOF0/SOF2, SOS
@@ -60,11 +60,11 @@ zpix.loadFile(path)
 ### Encoding (Image → File)
 
 ```
-zpix.saveFile(img, path)
+zpix.saveFile(io, img, path)
   │
   ├─ detect format from file extension
   │
-  ├─ PNG path: png.saveToFile()
+  ├─ PNG path: png.saveToFile(io, img, path)
   │   ├─ write PNG signature
   │   ├─ write IHDR chunk
   │   ├─ write IDAT chunk(s)
@@ -72,7 +72,7 @@ zpix.saveFile(img, path)
   │   │   └─ compress with deflate (fixed Huffman codes)
   │   └─ write IEND chunk
   │
-  └─ JPEG path: jpeg_encoder.saveToFile(quality)
+  └─ JPEG path: jpeg_encoder.saveToFile(io, img, path, quality)
       ├─ scale quantization tables by quality (IJG formula)
       ├─ write JFIF headers (SOI, APP0, DQT, SOF0, DHT, SOS)
       ├─ for each 8×8 block:

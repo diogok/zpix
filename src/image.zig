@@ -1,5 +1,10 @@
 pub const MAX_DIMENSION: u32 = 16384;
 
+/// Upper bound on file size when reading an entire image into memory.
+/// 256 MiB is generous for any sane image at MAX_DIMENSION; anything larger
+/// is almost certainly malicious or corrupt.
+pub const MAX_FILE_SIZE: usize = 256 * 1024 * 1024;
+
 width: u32,
 height: u32,
 channels: u8,

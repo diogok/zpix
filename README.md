@@ -54,32 +54,40 @@ Not supported: palette/indexed color, 16-bit depth, 1/2/4-bit depth, ancillary c
 
 ### File-based API
 
+File-based APIs take an `io: std.Io` instance as their first argument. Get
+one from "Juicy Main" (`init.io`) or, in tests, from `std.testing.io`.
+
 ```zig
 const zpix = @import("zpix");
 
-// Load any image (auto-detects format by magic bytes)
-var image = try zpix.loadFile(allocator, "photo.jpg");
-defer image.deinit();
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
+    const allocator = init.gpa;
 
-// Or load a specific format
-var png_image = try zpix.loadPngFile(allocator, "image.png");
-defer png_image.deinit();
+    // Load any image (auto-detects format by magic bytes)
+    var image = try zpix.loadFile(io, allocator, "photo.jpg");
+    defer image.deinit();
 
-// Crop
-var cropped = try image.crop(x, y, width, height);
-defer cropped.deinit();
+    // Or load a specific format
+    var png_image = try zpix.loadPngFile(io, allocator, "image.png");
+    defer png_image.deinit();
 
-// Resize
-var resized = try image.resize(new_width, new_height);
-defer resized.deinit();
+    // Crop
+    var cropped = try image.crop(x, y, width, height);
+    defer cropped.deinit();
 
-// Save (auto-detects format by file extension)
-try zpix.saveFile(&resized, "output.png");
-try zpix.saveFile(&resized, "output.jpg");
+    // Resize
+    var resized = try image.resize(new_width, new_height);
+    defer resized.deinit();
 
-// Or save a specific format
-try zpix.savePngFile(&resized, "output.png");
-try zpix.saveJpegFile(&resized, "output.jpg", 90); // quality 1-100
+    // Save (auto-detects format by file extension)
+    try zpix.saveFile(io, &resized, "output.png");
+    try zpix.saveFile(io, &resized, "output.jpg");
+
+    // Or save a specific format
+    try zpix.savePngFile(io, &resized, "output.png");
+    try zpix.saveJpegFile(io, &resized, "output.jpg", 90); // quality 1-100
+}
 ```
 
 ### Memory API
@@ -176,7 +184,7 @@ test "PNG decoder produces same output as stb_image for RGB" {
     defer stb_free(ref.data);
 
     // Load with Zig implementation
-    var zig_image = try zpix.loadPngFile(allocator, "test/fixtures/test_rgb_4x4.png");
+    var zig_image = try zpix.loadPngFile(std.testing.io, allocator, "test/fixtures/test_rgb_4x4.png");
     defer zig_image.deinit();
 
     // Compare pixel-by-pixel

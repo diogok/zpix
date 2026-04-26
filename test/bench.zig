@@ -1,13 +1,11 @@
 const std = @import("std");
 const zpix = @import("zpix");
 
-// C reference implementation bindings
-const c = @cImport({
-    @cInclude("stb_image.h");
-});
+// C reference implementation bindings (translated by build.zig)
+const c = @import("c");
 
 // Wrappers defined in ref_impl.c (stbi_write_png_to_mem and stbir are static,
-// so we call through our own extern wrappers instead of @cImport).
+// so we call through our own extern wrappers instead of translate-c).
 extern fn stb_write_png_to_mem(pixels: [*]const u8, w: c_int, h: c_int, channels: c_int, out_len: *c_int) ?[*]u8;
 extern fn stb_write_free(data: *anyopaque) void;
 extern fn stb_resize(input: [*]const u8, in_w: c_int, in_h: c_int, out_w: c_int, out_h: c_int, channels: c_int) ?[*]u8;
@@ -22,6 +20,10 @@ const print = std.debug.print;
 // ---------------------------------------------------------------------------
 // Timing helpers
 // ---------------------------------------------------------------------------
+
+fn elapsedNs(io: std.Io, start: std.Io.Timestamp) u64 {
+    return @intCast(start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
+}
 
 fn nsToMs(ns: u64) f64 {
     return @as(f64, @floatFromInt(ns)) / 1_000_000.0;
@@ -54,20 +56,20 @@ fn minVal(times: []const u64) f64 {
 // Individual benchmarks
 // ---------------------------------------------------------------------------
 
-fn benchPngDecodeZig() f64 {
+fn benchPngDecodeZig(io: std.Io) f64 {
     const allocator = std.heap.smp_allocator;
     var times: [iterations]u64 = undefined;
 
     // warmup
     {
-        var img = zpix.loadPngFile(allocator, png_path) catch @panic("zig png load failed");
+        var img = zpix.loadPngFile(io, allocator, png_path) catch @panic("zig png load failed");
         img.deinit();
     }
 
     for (&times) |*t| {
-        var timer = std.time.Timer.start() catch @panic("timer");
-        var img = zpix.loadPngFile(allocator, png_path) catch @panic("zig png load failed");
-        t.* = timer.read();
+        const start = std.Io.Clock.now(.awake, io);
+        var img = zpix.loadPngFile(io, allocator, png_path) catch @panic("zig png load failed");
+        t.* = elapsedNs(io, start);
         img.deinit();
     }
 
@@ -75,7 +77,7 @@ fn benchPngDecodeZig() f64 {
     return mean(&times);
 }
 
-fn benchPngDecodeC() f64 {
+fn benchPngDecodeC(io: std.Io) f64 {
     var times: [iterations]u64 = undefined;
 
     // warmup
@@ -91,9 +93,9 @@ fn benchPngDecodeC() f64 {
         var w: c_int = 0;
         var h: c_int = 0;
         var ch: c_int = 0;
-        var timer = std.time.Timer.start() catch @panic("timer");
+        const start = std.Io.Clock.now(.awake, io);
         const data = c.stbi_load(png_path, &w, &h, &ch, 0) orelse @panic("c png load failed");
-        t.* = timer.read();
+        t.* = elapsedNs(io, start);
         c.stbi_image_free(data);
     }
 
@@ -101,20 +103,20 @@ fn benchPngDecodeC() f64 {
     return mean(&times);
 }
 
-fn benchJpegDecodeZig() f64 {
+fn benchJpegDecodeZig(io: std.Io) f64 {
     const allocator = std.heap.smp_allocator;
     var times: [iterations]u64 = undefined;
 
     // warmup
     {
-        var img = zpix.loadJpegFile(allocator, jpg_path) catch @panic("zig jpeg load failed");
+        var img = zpix.loadJpegFile(io, allocator, jpg_path) catch @panic("zig jpeg load failed");
         img.deinit();
     }
 
     for (&times) |*t| {
-        var timer = std.time.Timer.start() catch @panic("timer");
-        var img = zpix.loadJpegFile(allocator, jpg_path) catch @panic("zig jpeg load failed");
-        t.* = timer.read();
+        const start = std.Io.Clock.now(.awake, io);
+        var img = zpix.loadJpegFile(io, allocator, jpg_path) catch @panic("zig jpeg load failed");
+        t.* = elapsedNs(io, start);
         img.deinit();
     }
 
@@ -122,7 +124,7 @@ fn benchJpegDecodeZig() f64 {
     return mean(&times);
 }
 
-fn benchJpegDecodeC() f64 {
+fn benchJpegDecodeC(io: std.Io) f64 {
     var times: [iterations]u64 = undefined;
 
     // warmup
@@ -138,9 +140,9 @@ fn benchJpegDecodeC() f64 {
         var w: c_int = 0;
         var h: c_int = 0;
         var ch: c_int = 0;
-        var timer = std.time.Timer.start() catch @panic("timer");
+        const start = std.Io.Clock.now(.awake, io);
         const data = c.stbi_load(jpg_path, &w, &h, &ch, 0) orelse @panic("c jpeg load failed");
-        t.* = timer.read();
+        t.* = elapsedNs(io, start);
         c.stbi_image_free(data);
     }
 
@@ -148,12 +150,12 @@ fn benchJpegDecodeC() f64 {
     return mean(&times);
 }
 
-fn benchPngEncodeZig() f64 {
+fn benchPngEncodeZig(io: std.Io) f64 {
     const allocator = std.heap.smp_allocator;
     var times: [iterations]u64 = undefined;
 
     // Load source image once
-    var img = zpix.loadPngFile(allocator, png_path) catch @panic("zig png load failed");
+    var img = zpix.loadPngFile(io, allocator, png_path) catch @panic("zig png load failed");
     defer img.deinit();
 
     // warmup
@@ -163,9 +165,9 @@ fn benchPngEncodeZig() f64 {
     }
 
     for (&times) |*t| {
-        var timer = std.time.Timer.start() catch @panic("timer");
+        const start = std.Io.Clock.now(.awake, io);
         const data = zpix.savePngMemory(allocator, &img) catch @panic("zig png encode failed");
-        t.* = timer.read();
+        t.* = elapsedNs(io, start);
         allocator.free(data);
     }
 
@@ -173,7 +175,7 @@ fn benchPngEncodeZig() f64 {
     return mean(&times);
 }
 
-fn benchPngEncodeC() f64 {
+fn benchPngEncodeC(io: std.Io) f64 {
     var times: [iterations]u64 = undefined;
 
     // Load source image once via C
@@ -192,9 +194,9 @@ fn benchPngEncodeC() f64 {
 
     for (&times) |*t| {
         var out_len: c_int = 0;
-        var timer = std.time.Timer.start() catch @panic("timer");
+        const start = std.Io.Clock.now(.awake, io);
         const data = stb_write_png_to_mem(pixels, w, h, ch, &out_len) orelse @panic("c png encode failed");
-        t.* = timer.read();
+        t.* = elapsedNs(io, start);
         stb_write_free(data);
     }
 
@@ -202,12 +204,12 @@ fn benchPngEncodeC() f64 {
     return mean(&times);
 }
 
-fn benchResizeZig() f64 {
+fn benchResizeZig(io: std.Io) f64 {
     const allocator = std.heap.smp_allocator;
     var times: [iterations]u64 = undefined;
 
     // Load source image once
-    var img = zpix.loadPngFile(allocator, png_path) catch @panic("zig png load failed");
+    var img = zpix.loadPngFile(io, allocator, png_path) catch @panic("zig png load failed");
     defer img.deinit();
 
     const new_w: u32 = 300;
@@ -220,9 +222,9 @@ fn benchResizeZig() f64 {
     }
 
     for (&times) |*t| {
-        var timer = std.time.Timer.start() catch @panic("timer");
+        const start = std.Io.Clock.now(.awake, io);
         var resized = img.resize(new_w, new_h) catch @panic("zig resize failed");
-        t.* = timer.read();
+        t.* = elapsedNs(io, start);
         resized.deinit();
     }
 
@@ -230,7 +232,7 @@ fn benchResizeZig() f64 {
     return mean(&times);
 }
 
-fn benchResizeC() f64 {
+fn benchResizeC(io: std.Io) f64 {
     var times: [iterations]u64 = undefined;
 
     // Load source image once via C
@@ -250,9 +252,9 @@ fn benchResizeC() f64 {
     }
 
     for (&times) |*t| {
-        var timer = std.time.Timer.start() catch @panic("timer");
+        const start = std.Io.Clock.now(.awake, io);
         const out = stb_resize(pixels, w, h, new_w, new_h, ch) orelse @panic("c resize failed");
-        t.* = timer.read();
+        t.* = elapsedNs(io, start);
         stb_free(out);
     }
 
@@ -284,29 +286,29 @@ fn printRatio(zig_mean: f64, c_mean: f64) void {
 // Main
 // ---------------------------------------------------------------------------
 
-pub fn main() !void {
-    const args = try std.process.argsAlloc(std.heap.smp_allocator);
-    defer std.process.argsFree(std.heap.smp_allocator, args);
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
 
     if (args.len > 1) {
         const cmd = args[1];
 
         if (std.mem.eql(u8, cmd, "png-decode-zig")) {
-            _ = benchPngDecodeZig();
+            _ = benchPngDecodeZig(io);
         } else if (std.mem.eql(u8, cmd, "png-decode-c")) {
-            _ = benchPngDecodeC();
+            _ = benchPngDecodeC(io);
         } else if (std.mem.eql(u8, cmd, "jpeg-decode-zig")) {
-            _ = benchJpegDecodeZig();
+            _ = benchJpegDecodeZig(io);
         } else if (std.mem.eql(u8, cmd, "jpeg-decode-c")) {
-            _ = benchJpegDecodeC();
+            _ = benchJpegDecodeC(io);
         } else if (std.mem.eql(u8, cmd, "png-encode-zig")) {
-            _ = benchPngEncodeZig();
+            _ = benchPngEncodeZig(io);
         } else if (std.mem.eql(u8, cmd, "png-encode-c")) {
-            _ = benchPngEncodeC();
+            _ = benchPngEncodeC(io);
         } else if (std.mem.eql(u8, cmd, "resize-zig")) {
-            _ = benchResizeZig();
+            _ = benchResizeZig(io);
         } else if (std.mem.eql(u8, cmd, "resize-c")) {
-            _ = benchResizeC();
+            _ = benchResizeC(io);
         } else {
             print("Unknown benchmark: {s}\n", .{cmd});
             print("Available: png-decode-zig png-decode-c jpeg-decode-zig jpeg-decode-c png-encode-zig png-encode-c resize-zig resize-c\n", .{});
@@ -319,23 +321,23 @@ pub fn main() !void {
     print("=== zpix benchmark (ReleaseFast) ===\n\n", .{});
 
     print("PNG decode (landscape_600x400.png, 600x400 RGB):\n", .{});
-    const png_zig = benchPngDecodeZig();
-    const png_c = benchPngDecodeC();
+    const png_zig = benchPngDecodeZig(io);
+    const png_c = benchPngDecodeC(io);
     printRatio(png_zig, png_c);
 
     print("JPEG decode (landscape_600x400.jpg, 600x400 RGB):\n", .{});
-    const jpg_zig = benchJpegDecodeZig();
-    const jpg_c = benchJpegDecodeC();
+    const jpg_zig = benchJpegDecodeZig(io);
+    const jpg_c = benchJpegDecodeC(io);
     printRatio(jpg_zig, jpg_c);
 
     print("PNG encode (600x400 RGB -> PNG):\n", .{});
-    const enc_zig = benchPngEncodeZig();
-    const enc_c = benchPngEncodeC();
+    const enc_zig = benchPngEncodeZig(io);
+    const enc_c = benchPngEncodeC(io);
     printRatio(enc_zig, enc_c);
 
     print("Resize (600x400 -> 300x200 RGB):\n", .{});
-    const rsz_zig = benchResizeZig();
-    const rsz_c = benchResizeC();
+    const rsz_zig = benchResizeZig(io);
+    const rsz_c = benchResizeC(io);
     printRatio(rsz_zig, rsz_c);
 
     print("\nFor memory profiling, run individual benchmarks with:\n", .{});

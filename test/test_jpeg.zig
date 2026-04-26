@@ -1,10 +1,8 @@
 const std = @import("std");
 const zpix = @import("zpix");
 
-// C reference implementation bindings
-const c = @cImport({
-    @cInclude("stb_image.h");
-});
+// C reference implementation bindings (translated by build.zig)
+const c = @import("c");
 
 fn stb_load(filename: [*:0]const u8, desired_channels: c_int) ?struct { data: [*]u8, width: c_int, height: c_int, channels: c_int } {
     var width: c_int = 0;
@@ -61,7 +59,7 @@ test "JPEG decoder produces same output as stb_image for RGB" {
     defer stb_free(ref.data);
 
     // Load with our Zig implementation
-    var zig_image = try zpix.loadJpegFile(allocator, "test/fixtures/test_rgb_4x4.jpg");
+    var zig_image = try zpix.loadJpegFile(std.testing.io, allocator, "test/fixtures/test_rgb_4x4.jpg");
     defer zig_image.deinit();
 
     // Compare dimensions
@@ -86,7 +84,7 @@ test "JPEG decoder produces same output as stb_image for grayscale" {
     defer stb_free(ref.data);
 
     // Load with our Zig implementation
-    var zig_image = try zpix.loadJpegFile(allocator, "test/fixtures/test_gray_8x8.jpg");
+    var zig_image = try zpix.loadJpegFile(std.testing.io, allocator, "test/fixtures/test_gray_8x8.jpg");
     defer zig_image.deinit();
 
     // Compare dimensions
@@ -111,7 +109,7 @@ test "JPEG decoder handles larger images" {
     defer stb_free(ref.data);
 
     // Load with our Zig implementation
-    var zig_image = try zpix.loadJpegFile(allocator, "test/fixtures/landscape_600x400.jpg");
+    var zig_image = try zpix.loadJpegFile(std.testing.io, allocator, "test/fixtures/landscape_600x400.jpg");
     defer zig_image.deinit();
 
     // Compare dimensions
@@ -145,7 +143,7 @@ test "JPEG decoder handles progressive RGB" {
     defer stb_free(ref.data);
 
     // Load with our Zig implementation
-    var img = try zpix.loadJpegFile(allocator, "test/fixtures/test_rgb_4x4_progressive.jpg");
+    var img = try zpix.loadJpegFile(std.testing.io, allocator, "test/fixtures/test_rgb_4x4_progressive.jpg");
     defer img.deinit();
 
     // Compare dimensions

@@ -45,33 +45,33 @@ pub fn detectFormat(header: []const u8) ImageFormat {
 }
 
 /// Load image from file, auto-detecting format by magic bytes.
-pub fn loadFile(allocator: Allocator, path: []const u8) !Image {
+pub fn loadFile(io: std.Io, allocator: Allocator, path: []const u8) !Image {
     // Read header to detect format, then close and let format-specific
     // loaders re-open the file (they manage their own buffered readers).
     var header: [8]u8 = undefined;
     const bytes_read = blk: {
-        const file = try std.fs.cwd().openFile(path, .{});
-        defer file.close();
-        break :blk try file.read(&header);
+        const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+        defer file.close(io);
+        break :blk try file.readPositional(io, &.{&header}, 0);
     };
     if (bytes_read < 2) return FormatError.UnsupportedFormat;
 
     const format = detectFormat(header[0..bytes_read]);
     switch (format) {
-        .png => return png.loadFromFile(allocator, path),
-        .jpeg => return jpeg.loadFromFile(allocator, path),
+        .png => return png.loadFromFile(io, allocator, path),
+        .jpeg => return jpeg.loadFromFile(io, allocator, path),
         .unknown => return FormatError.UnsupportedFormat,
     }
 }
 
 /// Save image to file, choosing format by output file extension.
 /// JPEG quality defaults to 90.
-pub fn saveFile(img: *const Image, path: []const u8) !void {
-    const extension = std.fs.path.extension(path);
+pub fn saveFile(io: std.Io, img: *const Image, path: []const u8) !void {
+    const extension = std.Io.Dir.path.extension(path);
     if (std.ascii.eqlIgnoreCase(extension, ".png")) {
-        return png.saveToFile(img, path);
+        return png.saveToFile(io, img, path);
     } else if (std.ascii.eqlIgnoreCase(extension, ".jpg") or std.ascii.eqlIgnoreCase(extension, ".jpeg")) {
-        return jpeg_encoder.saveToFile(img, path, 90);
+        return jpeg_encoder.saveToFile(io, img, path, 90);
     } else {
         return FormatError.UnsupportedFormat;
     }
@@ -107,14 +107,14 @@ test "detectFormat returns unknown for empty input" {
 }
 
 test "loadFile loads PNG by magic bytes" {
-    var img = try loadFile(std.testing.allocator, "test/fixtures/test_rgb_4x4.png");
+    var img = try loadFile(std.testing.io, std.testing.allocator, "test/fixtures/test_rgb_4x4.png");
     defer img.deinit();
     try std.testing.expectEqual(@as(u32, 4), img.width);
     try std.testing.expectEqual(@as(u32, 4), img.height);
 }
 
 test "loadFile loads JPEG by magic bytes" {
-    var img = try loadFile(std.testing.allocator, "test/fixtures/test_rgb_4x4.jpg");
+    var img = try loadFile(std.testing.io, std.testing.allocator, "test/fixtures/test_rgb_4x4.jpg");
     defer img.deinit();
     try std.testing.expectEqual(@as(u32, 4), img.width);
     try std.testing.expectEqual(@as(u32, 4), img.height);
